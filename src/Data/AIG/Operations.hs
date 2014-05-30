@@ -7,6 +7,7 @@ module Data.AIG.Operations
   , generate_msb0
   , replicate
   , bvFromInteger
+  , bvToList
 
   , neg
   , add
@@ -100,15 +101,20 @@ BV x ++ BV y = BV (x V.++ y)
 concat :: [BV l] -> BV l
 concat v = BV (V.concat (unBV <$> v))
 
-(!) :: BV l -> Int -> l
-(!) v i = v `at` (length v - 1 - i)
-
 slice :: BV l -> Int -> Int -> BV l
 slice (BV v) i n = BV (V.slice i n v)
 
 zipWithM :: (l -> l -> IO l) -> BV l -> BV l -> IO (BV l)
 zipWithM f (BV x) (BV y) = assert (V.length x == V.length y) $
   BV <$> V.zipWithM f x y
+
+-- | Convert a bitvector to a list.
+bvToList :: BV l -> [l]
+bvToList (BV v) = V.toList v
+
+(!) :: BV l -> Int -> l
+(!) v i = v `at` (length v - 1 - i)
+
 
 bvFromInteger :: IsAIG l g => g s -> Int -> Integer -> BV (l s)
 bvFromInteger g n v = generate_lsb0 n $ \i -> constant g (v `testBit` i)
