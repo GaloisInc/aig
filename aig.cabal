@@ -1,0 +1,31 @@
+Name:               aig
+Version:            0.1.0.0
+Synopsis:           And-inverter graphs in Haskell.
+Description:        Provides operations for working with AIGs in Haskell.
+Author:             Galois Inc.
+Maintainer:         jhendrix@galois.com
+Copyright:          (c) 2014 Galois Inc.
+Category:           Data
+build-type:         Simple
+cabal-Version:      >= 1.10
+
+flag enable-hpc
+  Description: Collect HPC coverage information.
+  Default: False
+
+library
+  Hs-source-dirs:       src
+  Exposed-modules:
+    Data.AIG
+    Data.AIG.Interface
+    Data.AIG.Operations
+
+  Default-Language:     Haskell2010
+  Ghc-options:          -Wall
+  Build-depends:
+    base >= 4,
+    mtl,
+    vector
+
+  if flag(enable-hpc)
+    ghc-options: -fhpc -hpcdir .hpc
