@@ -1,7 +1,7 @@
 Name:               aig
 Version:            0.1.0.0
 Synopsis:           And-inverter graphs in Haskell.
-Description:        Provides operations for working with AIGs in Haskell.
+Description:        Provides an interface for AIGs and word-level operations on them.
 Author:             Galois Inc.
 Maintainer:         jhendrix@galois.com
 Copyright:          (c) 2014 Galois Inc.
@@ -14,15 +14,15 @@ flag enable-hpc
   Default: False
 
 library
-  Hs-source-dirs:       src
-  Exposed-modules:
+  hs-source-dirs:   src
+  exposed-modules:
     Data.AIG
     Data.AIG.Interface
     Data.AIG.Operations
 
-  Default-Language:     Haskell2010
-  Ghc-options:          -Wall
-  Build-depends:
+  default-Language: Haskell2010
+  ghc-options:      -Wall
+  build-depends:
     base >= 4,
     mtl,
     vector
