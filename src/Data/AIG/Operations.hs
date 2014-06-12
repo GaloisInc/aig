@@ -24,6 +24,8 @@ module Data.AIG.Operations
   , shl
   , sshr
   , ushr
+  , rol
+  , ror
   , bvEq
   , sle
   , slt
@@ -384,3 +386,25 @@ sshr g x y = muxInteger (iteM g) (length x) y (return . shrC (msb x) x)
 ushr :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
 ushr g x y = muxInteger (iteM g) (length x) y (return . shrC (falseLit g) x)
 
+-- | Rotate left by a constant.
+rolC :: BV (l s) -> Int -> BV (l s)
+rolC (BV x) i
+  | V.null x  = BV x
+  | otherwise = BV (V.drop j x V.++ V.take j x)
+  where j = i `mod` V.length x
+
+-- | Rotate right by a constant.
+rorC :: BV (l s) -> Int -> BV (l s)
+rorC x i = rolC x (- i)
+
+-- | Rotate left.
+rol :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
+rol g x y = do
+  r <- urem g y (bvFromInteger g (length y) (toInteger (length x)))
+  muxInteger (iteM g) (length x - 1) r (return . rolC x)
+
+-- | Rotate right.
+ror :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
+ror g x y = do
+  r <- urem g y (bvFromInteger g (length y) (toInteger (length x)))
+  muxInteger (iteM g) (length x - 1) r (return . rorC x)
