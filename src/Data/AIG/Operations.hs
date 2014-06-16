@@ -37,9 +37,12 @@ module Data.AIG.Operations
 
   , (++)
   , concat
+  , take
+  , drop
   , slice
   , zipWithM
-  
+
+  , muxInteger  
   ) where
 
 import Control.Applicative
@@ -47,7 +50,7 @@ import Control.Exception
 import Control.Monad.State hiding (zipWithM)
 import Data.Bits ((.|.), setBit, shiftL, testBit)
 import qualified Data.Vector as V
-import Prelude hiding (and, concat, length, not, or, replicate, splitAt, tail, (++))
+import Prelude hiding (and, concat, length, not, or, replicate, splitAt, tail, (++), take, drop)
 
 import Data.AIG.Interface
 
@@ -105,6 +108,12 @@ BV x ++ BV y = BV (x V.++ y)
 
 concat :: [BV l] -> BV l
 concat v = BV (V.concat (unBV <$> v))
+
+take :: Int -> BV l -> BV l
+take i (BV v) = BV (V.take i v)
+
+drop :: Int -> BV l -> BV l
+drop i (BV v) = BV (V.drop i v)
 
 slice :: BV l -> Int -> Int -> BV l
 slice (BV v) i n = BV (V.slice i n v)
@@ -374,7 +383,7 @@ shlC g x s0 = slice x j (n-j) ++ replicate j (falseLit g)
   where n = length x
         j = min n s0
 
--- | Shift left by a constant.
+-- | Shift right by a constant.
 shrC :: l s -> BV (l s) -> Int -> BV (l s)
 shrC c x s0 = replicate j c ++ slice x 0 (n-j)
   where n = length x
@@ -387,14 +396,14 @@ ushr :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
 ushr g x y = muxInteger (iteM g) (length x) y (return . shrC (falseLit g) x)
 
 -- | Rotate left by a constant.
-rolC :: BV (l s) -> Int -> BV (l s)
+rolC :: BV l -> Int -> BV l
 rolC (BV x) i
   | V.null x  = BV x
   | otherwise = BV (V.drop j x V.++ V.take j x)
   where j = i `mod` V.length x
 
 -- | Rotate right by a constant.
-rorC :: BV (l s) -> Int -> BV (l s)
+rorC :: BV l -> Int -> BV l
 rorC x i = rolC x (- i)
 
 -- | Rotate left.
