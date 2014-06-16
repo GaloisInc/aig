@@ -24,6 +24,8 @@ module Data.AIG.Operations
   , shl
   , sshr
   , ushr
+  , rol
+  , ror
   , bvEq
   , sle
   , slt
@@ -75,7 +77,6 @@ instance Functor BV where
 length :: BV l -> Int
 length (BV v) = V.length v
 
-
 tail :: BV l -> BV l
 tail (BV v) = BV (V.tail v)
 
@@ -94,9 +95,11 @@ generateM_msb0 c f = return . BV =<< V.generateM c f
 replicate :: Int -> l -> BV l
 replicate c e = BV (V.replicate c e)
 
+-- | x `at` 0 is the most significant bit.
 at :: BV l -> Int -> l
 at (BV v) i = v V.! i
 
+-- | Append two bitvectors, with the most significant bitvector given first.
 (++) :: BV l -> BV l -> BV l
 BV x ++ BV y = BV (x V.++ y)
 
@@ -110,10 +113,11 @@ zipWithM :: (l -> l -> IO l) -> BV l -> BV l -> IO (BV l)
 zipWithM f (BV x) (BV y) = assert (V.length x == V.length y) $
   BV <$> V.zipWithM f x y
 
--- | Convert a bitvector to a list.
+-- | Convert a bitvector to a list, most significant bit first.
 bvToList :: BV l -> [l]
 bvToList (BV v) = V.toList v
 
+-- | x ! 0 is the least significant bit.
 (!) :: BV l -> Int -> l
 (!) v i = v `at` (length v - 1 - i)
 
@@ -180,7 +184,7 @@ fullSub g x y b_in = do
   b_out <- or g y_and_b c2
   return (s, b_out)
 
--- | Add two bit vectors together, returning borrow bit and result.
+-- | Subtract two bit vectors, returning result and borrow bit.
 full_sub :: IsAIG l g
          => g s 
          -> BV (l s)
@@ -195,7 +199,6 @@ full_sub g x y = do
 neg :: IsAIG l g => g s -> BV (l s) -> IO (BV (l s))
 neg g x = evalStateT (generateM_lsb0 (length x) unfold) (trueLit g)
   where unfold i = StateT $ \c -> halfAdder g (not (x `at` i)) c
-
 
 -- | Add two bitvectors with the same size.
 add :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
@@ -218,11 +221,11 @@ mul g x y = do
         updateBits (i+1) z'
   updateBits 0 $ replicate (length x) (falseLit g)
 
--- | Multiply two bitvectors with the same size.
+-- | Compute the quotient of two signed bitvectors with the same size.
 squot :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
 squot g x y = fst <$> squotRem g x y
 
--- | Multiply two bitvectors with the same size.
+-- | Compute the division remainder of two signed bitvectors with the same size.
 srem :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
 srem g x y = snd <$> squotRem g x y
 
@@ -297,30 +300,30 @@ squotRem g dividend' divisor' = do
     r' <- negWhen g (falseLit g `shiftR1` rr) dsign
     return (q', r')
 
--- | Multiply two bitvectors with the same size.
+-- | Compute the quotient of two unsigned bitvectors with the same size.
 uquot :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
 uquot g x y = fst <$> uquotRem g x y
 
--- | Multiply two bitvectors with the same size.
+-- | Compute the division remainder of two unsigned bitvectors with the same size.
 urem :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
 urem g x y = snd <$> uquotRem g x y
 
--- | Signed less-then-or-equal on bitvector with the same size.
+-- | Test equality of two bitvectors with the same size.
 bvEq :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (l s)
 bvEq g x y = go 0 (trueLit g)
   where n = length x
         go i r | i == n = return r
         go i r = go (i+1) =<< and g r =<< eq g (x `at` i) (y `at` i)
 
--- | Unsigned less-then on bitvector with the same size.
+-- | Unsigned less-than on bitvector with the same size.
 ult :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (l s)
 ult g x y = snd <$> full_sub g x y
 
--- | Unsigned less-then-or-equal on bitvector with the same size.
+-- | Unsigned less-than-or-equal on bitvector with the same size.
 ule :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (l s)
 ule g x y = not <$> ult g y x
 
--- | Signed less-then on bitvector with the same size.
+-- | Signed less-than on bitvector with the same size.
 slt :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (l s)
 slt g x y = do
   let xs = x `at` 0 
@@ -332,7 +335,7 @@ slt g x y = do
   c2 <- and g (not c1) =<< ult g (tail x) (tail y)
   or g c0 c2
 
--- | Signed less-then-or-equal on bitvector with the same size.
+-- | Signed less-than-or-equal on bitvector with the same size.
 sle :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (l s)
 sle g x y = not <$> slt g y x
 
@@ -383,3 +386,25 @@ sshr g x y = muxInteger (iteM g) (length x) y (return . shrC (msb x) x)
 ushr :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
 ushr g x y = muxInteger (iteM g) (length x) y (return . shrC (falseLit g) x)
 
+-- | Rotate left by a constant.
+rolC :: BV (l s) -> Int -> BV (l s)
+rolC (BV x) i
+  | V.null x  = BV x
+  | otherwise = BV (V.drop j x V.++ V.take j x)
+  where j = i `mod` V.length x
+
+-- | Rotate right by a constant.
+rorC :: BV (l s) -> Int -> BV (l s)
+rorC x i = rolC x (- i)
+
+-- | Rotate left.
+rol :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
+rol g x y = do
+  r <- urem g y (bvFromInteger g (length y) (toInteger (length x)))
+  muxInteger (iteM g) (length x - 1) r (return . rolC x)
+
+-- | Rotate right.
+ror :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
+ror g x y = do
+  r <- urem g y (bvFromInteger g (length y) (toInteger (length x)))
+  muxInteger (iteM g) (length x - 1) r (return . rorC x)
