@@ -8,10 +8,10 @@ module Data.AIG.Interface
   , Network(..)
   , networkInputCount
   , SomeGraph(..)
-  , LitView(..)
   , SatResult(..)
-  , toVerifyResult
   , VerifyResult(..)
+  , toSatResult
+  , toVerifyResult
   ) where
 
 import Control.Applicative ((<$>))
@@ -19,8 +19,12 @@ import Control.Monad
 import Prelude hiding (not, and, or)
 
 class IsLit l where
+  -- | Negate a literal.
   not :: l s -> l s
 
+  -- | Tests whether two lits are identical.
+  -- This is only a syntactic check, and may return false
+  -- even if the two literals represent the same predicate.
   (===) :: l s -> l s -> Bool
 
 -- | A proxy is used to identify a specific AIG instance when
@@ -58,14 +62,15 @@ class IsLit l => IsAIG l g | g -> l where
   -- | Get unique literal in graph representing constant false.
   falseLit :: g s -> l s
 
+  constant :: g s -> Bool -> l s
+  constant g True  = trueLit  g
+  constant g False = falseLit g
+
+  -- | Return if the literal is a fixed constant.
   asConstant :: g s -> l s -> Maybe Bool
   asConstant g l | l === trueLit g = Just True
                  | l === falseLit g = Just False
                  | otherwise = Nothing
-
-  constant :: g s -> Bool -> l s
-  constant g True  = trueLit  g
-  constant g False = falseLit g
 
   newInput :: g s -> IO (l s)
 
@@ -117,7 +122,6 @@ class IsLit l => IsAIG l g | g -> l where
             -> [Bool]           
             -> IO (l s -> Bool)
 
-
   -- | Evaluate the network on a set of concrete inputs.
   evaluate :: Network l g
            -> [Bool]           
@@ -125,14 +129,6 @@ class IsLit l => IsAIG l g | g -> l where
   evaluate (Network g outputs) inputs = do
     f <- evaluator g inputs
     return (f <$> outputs)
-
-data LitView l
-   = And !l !l
-   | NotAnd !l !l
-   | Input !Int
-   | NotInput !Int
-   | TrueLit
-   | FalseLit
 
 -- | A network is an and-inverstor graph paired with it's outputs,
 -- thus representing a complete combinational circuit.
@@ -157,12 +153,18 @@ data SatResult
    | Sat !([Bool])
   deriving (Eq,Show)
 
-toVerifyResult :: SatResult -> VerifyResult
-toVerifyResult Unsat = Valid
-toVerifyResult (Sat l) = Invalid l
-
--- | Verification result.
+-- | Result of a verification check.
 data VerifyResult
    = Valid
    | Invalid [Bool]
   deriving (Eq, Show)
+
+-- | Convert a sat result to a verify result by negating it.
+toVerifyResult :: SatResult -> VerifyResult
+toVerifyResult Unsat = Valid
+toVerifyResult (Sat l) = Invalid l
+
+-- | Convert a verify result to a sat result by negating it.
+toSatResult :: VerifyResult -> SatResult
+toSatResult Valid = Unsat
+toSatResult (Invalid l) = Sat l

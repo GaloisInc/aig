@@ -7,6 +7,8 @@ module Data.AIG.Operations
   , generate_msb0
   , replicate
   , bvFromInteger
+  , asUnsigned
+  , asSigned
   , bvToList
 
   , neg
@@ -41,7 +43,7 @@ module Data.AIG.Operations
 import Control.Applicative
 import Control.Exception
 import Control.Monad.State hiding (zipWithM)
-import Data.Bits (setBit, testBit)
+import Data.Bits ((.|.), setBit, shiftL, testBit)
 import qualified Data.Vector as V
 import Prelude hiding (and, concat, length, not, or, replicate, splitAt, tail, (++))
 
@@ -64,7 +66,7 @@ fullAdder g a b c_in = do
   c_out <- or g a_and_b =<< and g a_xor_b c_in
   return (s, c_out)
 
-
+-- | A new symbolic integer.
 newtype BV l = BV { unBV :: V.Vector l }
 
 instance Functor BV where
@@ -81,7 +83,7 @@ generate_lsb0 :: Int -> (Int -> l) -> BV l
 generate_lsb0 c f = BV (V.generate c (\i -> f ((c-1)-i)))
 
 generateM_lsb0 :: Monad m => Int -> (Int -> m l) -> m (BV l)
-generateM_lsb0 c f = return . BV =<< V.generateM c (\i -> f ((c-1)-i))
+generateM_lsb0 c f = return . BV . V.reverse =<< V.generateM c (\i -> f ((c-1)-i))
 
 generate_msb0 :: Int -> (Int -> l) -> BV l
 generate_msb0 c f = BV (V.generate c f)
@@ -115,9 +117,32 @@ bvToList (BV v) = V.toList v
 (!) :: BV l -> Int -> l
 (!) v i = v `at` (length v - 1 - i)
 
-
 bvFromInteger :: IsAIG l g => g s -> Int -> Integer -> BV (l s)
 bvFromInteger g n v = generate_lsb0 n $ \i -> constant g (v `testBit` i)
+
+asUnsigned :: IsAIG l g => g s -> BV (l s) -> Maybe Integer
+asUnsigned g v = go 0 0
+  where n = length v
+        go x i | i >= n = return x
+        go x i = do
+          b <- asConstant g (v `at` i)
+          let y  = if b then 1 else 0
+          let z = x `shiftL` 1 .|. y
+          seq z $ go z (i+1)
+
+asSigned :: IsAIG l g => g s -> BV (l s) -> Maybe Integer
+asSigned g v = assert (n > 0) $ go 0 1
+  where n = length v
+        m = n-1
+        go x i | i < m = do
+          b <- asConstant g (v `at` i)
+          let y  = if b then 1 else 0
+          let z = x `shiftL` 1 .|. y
+          seq z $ go z (i+1)
+        go x i = do
+          msbv <- asConstant g (v `at` i)
+          return $ if msbv then x - 2^m
+                           else x
 
 msb :: BV l -> l
 msb v = v `at` 0
