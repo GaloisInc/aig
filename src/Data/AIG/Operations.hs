@@ -42,7 +42,9 @@ module Data.AIG.Operations
   , slice
   , zipWithM
 
-  , muxInteger  
+  , muxInteger
+
+  , pmul
   ) where
 
 import Control.Applicative
@@ -417,3 +419,13 @@ ror :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
 ror g x y = do
   r <- urem g y (bvFromInteger g (length y) (toInteger (length x)))
   muxInteger (iteM g) (length x - 1) r (return . rorC x)
+
+-- | Polynomial multiplication. Note that the algorithm works the same
+-- no matter which endianness convention is used.
+pmul :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
+pmul g x y = generateM_msb0 (max 0 (m + n - 1)) coeff
+  where
+    m = length x
+    n = length y
+    coeff k = foldM (xor g) (falseLit g) =<<
+      sequence [ and g (at x i) (at y j) | i <- [0 .. k], let j = k - i, i < m, j < n ]
