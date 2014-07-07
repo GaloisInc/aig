@@ -1,3 +1,5 @@
+{-# LANGUAGE ScopedTypeVariables #-}
+
 module Data.AIG.Operations 
   ( BV
   , length
@@ -45,14 +47,17 @@ module Data.AIG.Operations
   , muxInteger
 
   , pmul
+  , pmod
   ) where
 
 import Control.Applicative
 import Control.Exception
+import qualified Control.Monad
 import Control.Monad.State hiding (zipWithM)
 import Data.Bits ((.|.), setBit, shiftL, testBit)
 import qualified Data.Vector as V
 import Prelude hiding (and, concat, length, not, or, replicate, splitAt, tail, (++), take, drop)
+import qualified Prelude
 
 import Data.AIG.Interface
 
@@ -127,6 +132,10 @@ zipWithM f (BV x) (BV y) = assert (V.length x == V.length y) $
 -- | Convert a bitvector to a list, most significant bit first.
 bvToList :: BV l -> [l]
 bvToList (BV v) = V.toList v
+
+-- | Convert a list to a bitvector, assuming big-endian bit order.
+bvFromList :: [l] -> BV l
+bvFromList xs = BV (V.fromList xs)
 
 -- | x ! 0 is the least significant bit.
 (!) :: BV l -> Int -> l
@@ -429,3 +438,43 @@ pmul g x y = generateM_msb0 (max 0 (m + n - 1)) coeff
     n = length y
     coeff k = foldM (xor g) (falseLit g) =<<
       sequence [ and g (at x i) (at y j) | i <- [0 .. k], let j = k - i, i < m, j < n ]
+
+-- | Polynomial mod with symbolic modulus. Return value has length one
+-- less than the length of the modulus.
+pmod :: forall l g s. IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
+pmod g x y = findmsb (bvToList y)
+  where
+    findmsb :: [l s] -> IO (BV (l s))
+    findmsb [] = return (replicate (length y - 1) (falseLit g)) -- division by zero
+    findmsb (c : cs)
+      | c === trueLit g = usemask cs
+      | c === falseLit g = findmsb cs
+      | otherwise = do
+          t <- usemask cs
+          f <- findmsb cs
+          zipWithM (mux g c) t f
+
+    usemask :: [l s] -> IO (BV (l s))
+    usemask m = do
+      rs <- go 0 p0 z0
+      return (zext g (bvFromList rs) (length y - 1))
+      where
+        msize = Prelude.length m
+        p0 = Prelude.replicate (msize - 1) (falseLit g) Prelude.++ [trueLit g]
+        z0 = Prelude.replicate msize (falseLit g)
+
+        next :: [l s] -> IO [l s]
+        next [] = return []
+        next (b : bs) = do
+          m' <- mapM (and g b) m
+          let bs' = bs Prelude.++ [falseLit g]
+          Control.Monad.zipWithM (xor g) m' bs'
+
+        go :: Int -> [l s] -> [l s] -> IO [l s]
+        go i p acc
+          | i >= length x = return acc
+          | otherwise = do
+              px <- mapM (and g (x ! i)) p
+              acc' <- Control.Monad.zipWithM (xor g) px acc
+              p' <- next p
+              go (i+1) p' acc'
