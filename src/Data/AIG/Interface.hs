@@ -1,6 +1,16 @@
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE Rank2Types #-}
+
+{- |
+Module      : Data.AIG.Interface
+Copyright   : (c) Galois, Inc. 2014
+License     : BSD3
+Maintainer  : jhendrix@galois.com
+Stability   : experimental
+Portability : portable
+-}
+
 module Data.AIG.Interface
   ( Proxy(..)
   , IsLit(..)
