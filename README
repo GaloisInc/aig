@@ -1,0 +1,5 @@
+A Haskell Interface for And-Inverter Graphs
+-------------------------------------------
+
+This package provides a generic interfaces for working
+with And-Inverter graphs in Haskell.
