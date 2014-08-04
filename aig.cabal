@@ -11,10 +11,13 @@ Category:           Data
 build-type:         Simple
 cabal-Version:      >= 1.10
 
-
 flag enable-hpc
   Description: Collect HPC coverage information.
   Default: False
+
+source-repository head
+  type: git
+  location: https://github.com/GaloisInc/aig.git
 
 library
   hs-source-dirs:   src
