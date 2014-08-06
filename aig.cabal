@@ -1,7 +1,5 @@
 Name:               aig
 Version:            0.1.0.0
-Synopsis:           And-inverter graphs in Haskell.
-Description:        Provides an interface for AIGs and word-level operations on them.
 License:            BSD3
 License-file:       LICENSE
 Author:             Galois Inc.
@@ -10,6 +8,16 @@ Copyright:          (c) 2014 Galois Inc.
 Category:           Data
 build-type:         Simple
 cabal-Version:      >= 1.10
+Synopsis:           And-inverter graphs in Haskell.
+Description:
+  This package provides a generic interfaces for working
+  with And-Inverter graphs (AIGs) in Haskell.  And-Inverter graphs
+  are a useful format for representing combinatorial and
+  sequential boolean circuits in a way that is amenable to
+  simulation and analysis.
+
+  These interfaces allow clients to write code that can create
+  and use AIGs without depending on a particular AIG package.
 
 flag enable-hpc
   Description: Collect HPC coverage information.

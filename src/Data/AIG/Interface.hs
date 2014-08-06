@@ -9,15 +9,22 @@ License     : BSD3
 Maintainer  : jhendrix@galois.com
 Stability   : experimental
 Portability : portable
+
+Interfaces for building, simulating and analysing And-Inverter Graphs (AIG).
 -}
 
 module Data.AIG.Interface
-  ( Proxy(..)
-  , IsLit(..)
+  ( -- * Main interface classes
+    IsLit(..)
   , IsAIG(..)
+
+    -- * Helper datatypes
+  , Proxy(..)
+  , SomeGraph(..)
   , Network(..)
   , networkInputCount
-  , SomeGraph(..)
+
+    -- * Representations of prover results
   , SatResult(..)
   , VerifyResult(..)
   , toSatResult
@@ -44,8 +51,8 @@ data Proxy l g where
 
 -- | An And-Inverter-Graph is a data structure storing bit-level
 -- nodes.
--- 
--- Graphs are and-invertor graphs, which contain a number of input
+--
+-- Graphs are and-inverter graphs, which contain a number of input
 -- literals and Boolean operations for creating new literals.
 -- Every literal is part of a specific graph, and literals from
 -- different networks may not be mixed.
@@ -54,16 +61,23 @@ data Proxy l g where
 -- phantom type for an arugment that is used to ensure that literals
 -- from different networks cannot be used in the same operation.
 class IsLit l => IsAIG l g | g -> l where
-  withNewGraph :: Proxy l g
+  -- | Create a temporary graph, and use it to compute a result value.
+  withNewGraph :: Proxy l g -- ^ A 'Proxy' value, used for selecting the concrete
+                            --   implementation typeclass
                -> (forall s . g s -> IO a)
+                            -- ^ The AIG graph computation to run
                -> IO a
   withNewGraph p f = newGraph p >>= (`withSomeGraph` f)
 
-  newGraph :: Proxy l g -> IO (SomeGraph g)
+  -- | Build a new graph instance, and packge it into the
+  --   'SomeGraph' type that remembers the IsAIG implementation.
+  newGraph :: Proxy l g
+           -> IO (SomeGraph g)
   newGraph p = withNewGraph p (return . SomeGraph)
 
+  -- | Read an AIG from a file, assumed to be in Aiger format
   aigerNetwork :: Proxy l g
-               -> FilePath 
+               -> FilePath
                -> IO (Network l g)
 
   -- | Get unique literal in graph representing constant true.
@@ -72,33 +86,42 @@ class IsLit l => IsAIG l g | g -> l where
   -- | Get unique literal in graph representing constant false.
   falseLit :: g s -> l s
 
+  -- | Generate a constant literal value
   constant :: g s -> Bool -> l s
   constant g True  = trueLit  g
   constant g False = falseLit g
 
-  -- | Return if the literal is a fixed constant.
+  -- | Return if the literal is a fixed constant.  If the literal
+  --   is symbolic, return @Nothing@.
   asConstant :: g s -> l s -> Maybe Bool
   asConstant g l | l === trueLit g = Just True
                  | l === falseLit g = Just False
                  | otherwise = Nothing
 
+  -- | Generate a fresh input literal
   newInput :: g s -> IO (l s)
 
+  -- | Compute the logical and of two literals
   and :: g s -> l s -> l s -> IO (l s)
 
+  -- | Build the conjunction of a list of literals
   ands :: g s -> [l s] -> IO (l s)
   ands g [] = return (trueLit g)
   ands g (x:r) = foldM (and g) x r
 
+  -- | Compute the logical or of two literals
   or :: g s -> l s -> l s -> IO (l s)
   or g x y = not <$> and g (not x) (not y)
 
+  -- | Compute the logical equality of two literals
   eq :: g s -> l s -> l s -> IO (l s)
   eq g x y = not <$> xor g x y
 
+  -- | Compute the logical implication of two literals
   implies :: g s -> l s -> l s -> IO (l s)
   implies g x y = or g (not x) y
 
+  -- | Compute the exclusive or of two literals
   xor :: g s -> l s -> l s -> IO (l s)
   xor g x y = do
     o <- or g x y
@@ -129,19 +152,19 @@ class IsLit l => IsAIG l g | g -> l where
 
   -- | Evaluate the network on a set of concrete inputs.
   evaluator :: g s
-            -> [Bool]           
+            -> [Bool]
             -> IO (l s -> Bool)
 
   -- | Evaluate the network on a set of concrete inputs.
   evaluate :: Network l g
-           -> [Bool]           
+           -> [Bool]
            -> IO [Bool]
   evaluate (Network g outputs) inputs = do
     f <- evaluator g inputs
     return (f <$> outputs)
 
 -- | A network is an and-inverstor graph paired with it's outputs,
--- thus representing a complete combinational circuit.
+--   thus representing a complete combinational circuit.
 data Network l g where
    Network :: IsAIG l g => g s -> [l s] -> Network l g
 
@@ -152,6 +175,7 @@ networkInputCount (Network g _) = inputCount g
 data SomeGraph g where
   SomeGraph :: g s -> SomeGraph g
 
+-- | Unpack @SomeGraph@ in a local scope so it can be used to compute a result
 withSomeGraph :: SomeGraph g
               -> (forall s . g s -> IO a)
               -> IO a

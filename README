@@ -2,4 +2,15 @@ A Haskell Interface for And-Inverter Graphs
 -------------------------------------------
 
 This package provides a generic interfaces for working
-with And-Inverter graphs in Haskell.
+with And-Inverter graphs (AIGs) in Haskell.  And-Inverter graphs
+are a useful format for representing combinatorial and
+sequential boolean circuits in a way that is amenable to
+simulation and analysis.
+
+These interfaces allow clients to write code that can create
+and use AIGs without depending on a particular AIG package.
+The [abcBridge package][abcBridge] provides an instance of this API that binds
+to the [ABC][ABC] library.
+
+[abcBridge]: http://github.com/GaloisInc/abcBridge
+[ABC]: http://www.eecs.berkeley.edu/~alanmi/abc/

@@ -7,54 +7,74 @@ License     : BSD3
 Maintainer  : jhendrix@galois.com
 Stability   : experimental
 Portability : portable
+
+A collection of higher-level operations (mostly various 2's complement arithmetic operations)
+that can be build from the primitive And-Inverter Graph interface.
 -}
 
-module Data.AIG.Operations 
-  ( BV
+module Data.AIG.Operations
+  ( -- * Bitvectors
+    BV
   , length
   , at
   , (!)
-  , generateM_msb0
-  , generate_msb0
-  , replicate
-  , bvFromInteger
-  , asUnsigned
-  , asSigned
-  , bvToList
-
-  , neg
-  , add
-  , sub
-  , mul
-
-  , squot
-  , srem
-  , uquot
-  , urem
- 
-  , shl
-  , sshr
-  , ushr
-  , rol
-  , ror
-  , bvEq
-  , sle
-  , slt
-  , ule
-  , ult
-  , sext
-  , zext
-  , msb
-
   , (++)
   , concat
   , take
   , drop
   , slice
   , zipWithM
+  , msb
+  , lsb
 
+    -- ** Building bitvectors
+  , generateM_msb0
+  , generate_msb0
+  , generateM_lsb0
+  , generate_lsb0
+  , replicate
+  , bvFromInteger
   , muxInteger
 
+    -- ** Deconstructing bitvectors
+  , asUnsigned
+  , asSigned
+  , bvToList
+
+    -- * Numeric operations on bitvectors
+    -- ** Addition and subtraction
+  , neg
+  , add
+  , addC
+  , sub
+  , subC
+
+    -- ** Multiplication and division
+  , mul
+  , squot
+  , srem
+  , uquot
+  , urem
+
+    -- ** Shifts and rolls
+  , shl
+  , sshr
+  , ushr
+  , rol
+  , ror
+
+    -- ** Numeric comparisons
+  , bvEq
+  , sle
+  , slt
+  , ule
+  , ult
+
+    -- ** Extensions
+  , sext
+  , zext
+
+    -- * Polynomial multiplication and modulus
   , pmul
   , pmod
   ) where
@@ -87,34 +107,64 @@ fullAdder g a b c_in = do
   c_out <- or g a_and_b =<< and g a_xor_b c_in
   return (s, c_out)
 
--- | A new symbolic integer.
+-- | A BitVector consists of a sequence of symbolic bits and can be used
+--   for symbolic machine-word arithmetic.
 newtype BV l = BV { unBV :: V.Vector l }
 
 instance Functor BV where
   fmap f (BV v) = BV (f <$> v)
 
+-- | Number of bits in a bit vector
 length :: BV l -> Int
 length (BV v) = V.length v
 
 tail :: BV l -> BV l
 tail (BV v) = BV (V.tail v)
 
-generate_lsb0 :: Int -> (Int -> l) -> BV l
+-- | Generate a bitvector of length @n@, using function @f@ to specify the bit literals.
+--   The indexes to @f@ are given in LSB-first order, i.e., @f 0@ is the least significant bit.
+generate_lsb0
+   :: Int            -- ^ @n@, length of the generated bitvector
+   -> (Int -> l)     -- ^ @f@, function to calculate bit literals
+   -> BV l
 generate_lsb0 c f = BV (V.generate c (\i -> f ((c-1)-i)))
 
-generateM_lsb0 :: Monad m => Int -> (Int -> m l) -> m (BV l)
+-- | Generate a bitvector of length @n@, using monadic function @f@ to generate the bit literals.
+--   The indexes to @f@ are given in LSB-first order, i.e., @f 0@ is the least significant bit.
+generateM_lsb0
+   :: Monad m
+   => Int            -- ^ @n@, length of the generated bitvector
+   -> (Int -> m l)   -- ^ @f@, computation to generate a bit literal
+   -> m (BV l)
 generateM_lsb0 c f = return . BV . V.reverse =<< V.generateM c (\i -> f ((c-1)-i))
 
-generate_msb0 :: Int -> (Int -> l) -> BV l
+-- | Generate a bitvector of length @n@, using function @f@ to specify the bit literals.
+--   The indexes to @f@ are given in MSB-first order, i.e., @f 0@ is the most significant bit.
+generate_msb0
+   :: Int            -- ^ @n@, length of the generated bitvector
+   -> (Int -> l)     -- ^ @f@, function to calculate bit literals
+   -> BV l
 generate_msb0 c f = BV (V.generate c f)
 
-generateM_msb0 :: Monad m => Int -> (Int -> m l) -> m (BV l)
+-- | Generate a bitvector of length @n@, using monadic function @f@ to generate the bit literals.
+--   The indexes to @f@ are given in MSB-first order, i.e., @f 0@ is the most significant bit.
+generateM_msb0
+   :: Monad m
+   => Int            -- ^ @n@, length of the generated bitvector
+   -> (Int -> m l)   -- ^ @f@, computation to generate a bit literal
+   -> m (BV l)
 generateM_msb0 c f = return . BV =<< V.generateM c f
 
-replicate :: Int -> l -> BV l
+-- | Generate a bit vector of length @n@ where every bit value is literal @l@.
+replicate
+   :: Int   -- ^ @n@, length of the bitvector
+   -> l     -- ^ @l@, the value to replicate
+   -> BV l
 replicate c e = BV (V.replicate c e)
 
--- | x `at` 0 is the most significant bit.
+-- | Project the individual bits of a BitVector.
+--   @x `at` 0@ is the most significant bit.
+--   It is an error to request an out-of-bounds bit.
 at :: BV l -> Int -> l
 at (BV v) i = v V.! i
 
@@ -122,18 +172,28 @@ at (BV v) i = v V.! i
 (++) :: BV l -> BV l -> BV l
 BV x ++ BV y = BV (x V.++ y)
 
+-- | Concatenate a list of bitvectors, with the most significant bitvector at the
+--   head of the list.
 concat :: [BV l] -> BV l
 concat v = BV (V.concat (unBV <$> v))
 
+-- | Project out the `n` most significant bits from a bitvector.
 take :: Int -> BV l -> BV l
 take i (BV v) = BV (V.take i v)
 
+-- | Drop the @n@ most significant bits from a bitvector.
 drop :: Int -> BV l -> BV l
 drop i (BV v) = BV (V.drop i v)
 
-slice :: BV l -> Int -> Int -> BV l
+-- | Extract @n@ bits starting at index @i@.
+--   The vector must contain at least @i+n@ elements
+slice :: BV l
+      -> Int   -- ^ @i@, 0-based start index
+      -> Int   -- ^ @n@, bits to take
+      -> BV l  -- ^ a vector consisting of the bits from @i@ to @i+n-1@
 slice (BV v) i n = BV (V.slice i n v)
 
+-- | Combine two bitvectors with a bitwise monadic combiner action.
 zipWithM :: (l -> l -> IO l) -> BV l -> BV l -> IO (BV l)
 zipWithM f (BV x) (BV y) = assert (V.length x == V.length y) $
   BV <$> V.zipWithM f x y
@@ -146,13 +206,23 @@ bvToList (BV v) = V.toList v
 bvFromList :: [l] -> BV l
 bvFromList xs = BV (V.fromList xs)
 
--- | x ! 0 is the least significant bit.
+-- | Select bits from a bitvector, starting from the least significant bit.
+--   @x ! 0@ is the least significant bit.
+--   It is an error to request an out-of-bounds bit.
 (!) :: BV l -> Int -> l
 (!) v i = v `at` (length v - 1 - i)
 
-bvFromInteger :: IsAIG l g => g s -> Int -> Integer -> BV (l s)
+-- | Generate a bitvector from an integer value, using 2's complement representation.
+bvFromInteger
+   :: IsAIG l g
+   => g s
+   -> Int       -- ^ number of bits in the resulting bitvector
+   -> Integer   -- ^ integer value
+   -> BV (l s)
 bvFromInteger g n v = generate_lsb0 n $ \i -> constant g (v `testBit` i)
 
+-- | Interpret a bitvector as an unsigned integer.  Return @Nothing@ if
+--   the bitvector is not concrete.
 asUnsigned :: IsAIG l g => g s -> BV (l s) -> Maybe Integer
 asUnsigned g v = go 0 0
   where n = length v
@@ -163,6 +233,8 @@ asUnsigned g v = go 0 0
           let z = x `shiftL` 1 .|. y
           seq z $ go z (i+1)
 
+-- | Interpret a bitvector as a signed integer.  Return @Nothing@ if
+--   the bitvector is not concrete.
 asSigned :: IsAIG l g => g s -> BV (l s) -> Maybe Integer
 asSigned g v = assert (n > 0) $ go 0 1
   where n = length v
@@ -177,25 +249,47 @@ asSigned g v = assert (n > 0) $ go 0 1
           return $ if msbv then x - 2^m
                            else x
 
+-- | Retrieve the most significant bit of a bitvector.
 msb :: BV l -> l
 msb v = v `at` 0
 
-ite :: IsAIG l g => g s -> l s -> BV (l s) -> BV (l s) -> IO (BV (l s))
+-- | Retrieve the least significant bit of a bitvector.
+lsb :: BV l -> l
+lsb v = v ! 0
+
+-- | If-then-else combinator for bitvectors.
+ite
+   :: IsAIG l g
+   => g s
+   -> l s          -- ^ test bit
+   -> BV (l s)     -- ^ then bitvector
+   -> BV (l s)     -- ^ else bitvector
+   -> IO (BV (l s))
 ite g c x y = zipWithM (mux g c) x y
 
-iteM :: IsAIG l g => g s -> l s -> IO (BV (l s)) -> IO (BV (l s)) -> IO (BV (l s))
-iteM g c x y 
+-- | If-then-else combinator for bitvector computations with optimistic
+--   shortcutting.  If the test bit is concrete, we can avoid generating
+--   either the if or the else circuit.
+iteM
+   :: IsAIG l g
+   => g s
+   -> l s                -- ^ test bit
+   -> IO (BV (l s))      -- ^ then circuit computation
+   -> IO (BV (l s))      -- ^ else circuit computation
+   -> IO (BV (l s))
+iteM g c x y
   | c === trueLit g = x
   | c === falseLit g = y
   | otherwise = join $ zipWithM (mux g c) <$> x <*> y
 
--- | Implements a ripple carry adder.
-ripple_add :: IsAIG l g 
+-- | Implements a ripple carry adder.  Both addends are assumed to have
+--   the same length.
+ripple_add :: IsAIG l g
            => g s
            -> BV (l s)
            -> BV (l s)
-           -> l s
-           -> IO (BV (l s), l s)
+           -> l s                -- ^ carry-in bit
+           -> IO (BV (l s), l s) -- ^ sum and carry-out bit
 ripple_add _ x _ c | length x == 0 = return (x, c)
 ripple_add g x y c0 = do
   let unfold i = StateT $ \c -> do
@@ -215,7 +309,7 @@ fullSub g x y b_in = do
 
 -- | Subtract two bit vectors, returning result and borrow bit.
 full_sub :: IsAIG l g
-         => g s 
+         => g s
          -> BV (l s)
          -> BV (l s)
          -> IO (BV (l s), l s)
@@ -224,18 +318,27 @@ full_sub g x y = do
   let unfold i = StateT $ \b -> fullSub g (x `at` i) (y `at` i) b
   runStateT (generateM_lsb0 (length x) unfold) (falseLit g)
 
--- | Negate the vector
+-- | Compute the 2's complement negation of a bitvector
 neg :: IsAIG l g => g s -> BV (l s) -> IO (BV (l s))
 neg g x = evalStateT (generateM_lsb0 (length x) unfold) (trueLit g)
   where unfold i = StateT $ \c -> halfAdder g (not (x `at` i)) c
 
--- | Add two bitvectors with the same size.
+-- | Add two bitvectors with the same size.  Discard carry bit.
 add :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
-add g x y = fst <$> ripple_add g x y (falseLit g)
+add g x y = fst <$> addC g x y
 
--- | Subtract one bitvector from another with the same size.
+-- | Add two bitvectors with the same size with carry.
+addC :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s), l s)
+addC g x y = ripple_add g x y (falseLit g)
+
+-- | Subtract one bitvector from another with the same size.  Discard carry bit.
 sub :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
-sub g x y = fst <$> ripple_add g x (not <$> y) (trueLit g)
+sub g x y = fst <$> subC g x y
+
+-- | Subtract one bitvector from another with the same size with carry.
+subC :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s), l s)
+subC g x y = ripple_add g x (not <$> y) (trueLit g)
+
 
 -- | Multiply two bitvectors with the same size.
 mul :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
@@ -246,15 +349,15 @@ mul g x y = do
   let updateBits i z | i == n = return z
       updateBits i z = do
         z_inc <- add g z (shlC g x i)
-        z' <- ite g (y ! i) z_inc z        
+        z' <- ite g (y ! i) z_inc z
         updateBits (i+1) z'
   updateBits 0 $ replicate (length x) (falseLit g)
 
--- | Compute the quotient of two signed bitvectors with the same size.
+-- | Compute the signed quotient of two signed bitvectors with the same size.
 squot :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
 squot g x y = fst <$> squotRem g x y
 
--- | Compute the division remainder of two signed bitvectors with the same size.
+-- | Compute the signed division remainder of two signed bitvectors with the same size.
 srem :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
 srem g x y = snd <$> squotRem g x y
 
@@ -270,7 +373,7 @@ splitAt :: Int -> BV l -> (BV l, BV l)
 splitAt n (BV v) = (BV x, BV y)
   where (x,y) = V.splitAt n v
 
-stepN :: Monad m => Int -> (a -> m a) -> a -> m a 
+stepN :: Monad m => Int -> (a -> m a) -> a -> m a
 stepN n f x
   | n > 0 = stepN (n-1) f =<< f x
   | otherwise = return x
@@ -329,11 +432,11 @@ squotRem g dividend' divisor' = do
     r' <- negWhen g (falseLit g `shiftR1` rr) dsign
     return (q', r')
 
--- | Compute the quotient of two unsigned bitvectors with the same size.
+-- | Compute the unsigned quotient of two unsigned bitvectors with the same size.
 uquot :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
 uquot g x y = fst <$> uquotRem g x y
 
--- | Compute the division remainder of two unsigned bitvectors with the same size.
+-- | Compute the unsigned division remainder of two unsigned bitvectors with the same size.
 urem :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
 urem g x y = snd <$> uquotRem g x y
 
@@ -355,7 +458,7 @@ ule g x y = not <$> ult g y x
 -- | Signed less-than on bitvector with the same size.
 slt :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (l s)
 slt g x y = do
-  let xs = x `at` 0 
+  let xs = x `at` 0
   let ys = y `at` 0
   -- x is negative and y is positive.
   c0 <- and g xs (not ys)
@@ -380,10 +483,10 @@ zext :: IsAIG l g => g s -> BV (l s) -> Int -> BV (l s)
 zext g v r = assert (r >= n) $ replicate (r - n) (falseLit g) ++ v
   where n = length v
 
--- | @lMuxInteger mergeFn maxValue lv valueFn@ returns a circuit
+-- | @muxInteger mergeFn maxValue lv valueFn@ returns a circuit
 -- whose result is @valueFn v@ when @lv@ has value @v@.
 muxInteger :: (Integral i, Monad m)
-           => (l -> m a -> m a -> m a)
+           => (l -> m a -> m a -> m a) -- Combining operation for muxing on individual bit values
            -> i -- ^ Maximum value input vector is allowed to take.
            -> BV l -- ^ Input vector
            -> (i -> m a)
@@ -394,7 +497,12 @@ muxInteger mergeFn maxValue vx valueFn = impl (length vx) 0
         impl i y = mergeFn (vx ! j) (impl j (y `setBit` j)) (impl j y)
           where j = i - 1
 
-shl :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
+-- | Shift left.  The least significant bit becomes 0.
+shl :: IsAIG l g
+    => g s
+    -> BV (l s)       -- ^ the value to shift
+    -> BV (l s)       -- ^ how many places to shift
+    -> IO (BV (l s))
 shl g x y = muxInteger (iteM g) (length x) y (return . shlC g x)
 
 -- | Shift left by a constant.
@@ -409,10 +517,20 @@ shrC c x s0 = replicate j c ++ slice x 0 (n-j)
   where n = length x
         j = min n s0
 
-sshr :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
+-- | Signed right shift.  The most significant bit is copied.
+sshr :: IsAIG l g
+     => g s
+     -> BV (l s)     -- ^ the value to shift
+     -> BV (l s)     -- ^ how many places to shift
+     -> IO (BV (l s))
 sshr g x y = muxInteger (iteM g) (length x) y (return . shrC (msb x) x)
 
-ushr :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
+-- | Unsigned right shift.  The most significant bit becomes 0.
+ushr :: IsAIG l g
+     => g s
+     -> BV (l s)     -- ^ the value to shift
+     -> BV (l s)     -- ^ how many places to shift
+     -> IO (BV (l s))
 ushr g x y = muxInteger (iteM g) (length x) y (return . shrC (falseLit g) x)
 
 -- | Rotate left by a constant.
@@ -427,20 +545,33 @@ rorC :: BV l -> Int -> BV l
 rorC x i = rolC x (- i)
 
 -- | Rotate left.
-rol :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
+rol :: IsAIG l g
+    => g s
+    -> BV (l s)    -- ^ the value to rotate
+    -> BV (l s)    -- ^ how many places to rotate
+    -> IO (BV (l s))
 rol g x y = do
   r <- urem g y (bvFromInteger g (length y) (toInteger (length x)))
   muxInteger (iteM g) (length x - 1) r (return . rolC x)
 
 -- | Rotate right.
-ror :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
+ror :: IsAIG l g
+    => g s
+    -> BV (l s)    -- ^ the value to rotate
+    -> BV (l s)    -- ^ how many places to rotate
+    -> IO (BV (l s))
 ror g x y = do
   r <- urem g y (bvFromInteger g (length y) (toInteger (length x)))
   muxInteger (iteM g) (length x - 1) r (return . rorC x)
 
 -- | Polynomial multiplication. Note that the algorithm works the same
--- no matter which endianness convention is used.
-pmul :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
+--   no matter which endianness convention is used.  Result length is
+--   @max 0 (m+n-1)@, where @m@ and @n@ are the lengths of the inputs.
+pmul :: IsAIG l g
+     => g s
+     -> BV (l s)
+     -> BV (l s)
+     -> IO (BV (l s))
 pmul g x y = generateM_msb0 (max 0 (m + n - 1)) coeff
   where
     m = length x
