@@ -19,9 +19,10 @@ Description:
   These interfaces allow clients to write code that can create
   and use AIGs without depending on a particular AIG package.
 
-flag enable-hpc
-  Description: Collect HPC coverage information.
-  Default: False
+-- Ugh. Temporary fix to make Hackage happy.
+--flag enable-hpc
+--  Description: Collect HPC coverage information.
+--  Default: False
 
 source-repository head
   type: git
@@ -41,5 +42,6 @@ library
     mtl,
     vector
 
-  if flag(enable-hpc)
-    ghc-options: -fhpc -hpcdir .hpc
+-- Ugh. Temporary fix to make Hackage happy.
+--  if flag(enable-hpc)
+--    ghc-options: -fhpc -hpcdir .hpc
