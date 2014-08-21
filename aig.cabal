@@ -39,7 +39,8 @@ library
   build-depends:
     base == 4.*,
     mtl,
-    vector
+    vector,
+    QuickCheck >= 2.7
 
   if flag(enable-hpc)
     ghc-options: -fhpc -hpcdir .hpc
