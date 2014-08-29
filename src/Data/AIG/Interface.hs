@@ -18,6 +18,7 @@ module Data.AIG.Interface
   ( -- * Main interface classes
     IsLit(..)
   , IsAIG(..)
+  , lazyMux
 
     -- * Helper datatypes
   , Proxy(..)
@@ -266,6 +267,13 @@ toLitForest g = foldAIGs g (return . LitTree)
 fromLitForest :: IsAIG l g => g s -> [LitTree] -> IO [l s]
 fromLitForest g = unfoldAIGs g (return . unLitTree)
 
+-- | Short-cutting mux operator that optimizes the case
+--   where the test bit is a concrete literal
+lazyMux :: IsAIG l g => g s -> l s -> IO (l s) -> IO (l s) -> IO (l s)
+lazyMux g c
+  | c === (trueLit g)  = \x _y -> x
+  | c === (falseLit g) = \_x y -> y
+  | otherwise = \x y -> join $ pure (mux g c) <*> x <*> y
 
 -- | A network is an and-inverstor graph paired with it's outputs,
 --   thus representing a complete combinational circuit.
@@ -289,24 +297,27 @@ withSomeGraph (SomeGraph g) f = f g
 data SatResult
    = Unsat
    | Sat !([Bool])
+   | SatUnknown
   deriving (Eq,Show)
 
 -- | Result of a verification check.
 data VerifyResult
    = Valid
    | Invalid [Bool]
+   | VerifyUnknown
   deriving (Eq, Show)
 
 -- | Convert a sat result to a verify result by negating it.
 toVerifyResult :: SatResult -> VerifyResult
 toVerifyResult Unsat = Valid
 toVerifyResult (Sat l) = Invalid l
+toVerifyResult SatUnknown = VerifyUnknown
 
 -- | Convert a verify result to a sat result by negating it.
 toSatResult :: VerifyResult -> SatResult
 toSatResult Valid = Unsat
 toSatResult (Invalid l) = Sat l
-
+toSatResult VerifyUnknown = SatUnknown
 
 -- | Generate an arbitrary `LitView` given a generator for `a`
 genLitView :: Gen a -> Gen (LitView a)

@@ -35,7 +35,7 @@ library
     Data.AIG.Operations
 
   default-Language: Haskell2010
-  ghc-options:      -Wall
+  ghc-options:      -Wall -fno-ignore-asserts -auto-all -caf-all -O2
   build-depends:
     base == 4.*,
     mtl,
