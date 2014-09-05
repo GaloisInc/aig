@@ -41,14 +41,19 @@ module Data.AIG.Operations
   , replicate
   , replicateM
   , bvFromInteger
+  , bvFromList
   , muxInteger
   , singleton
 
     -- ** Lazy operators
   , lAnd
+  , lAnd'
   , lOr
+  , lOr'
   , lXor
+  , lXor'
   , lEq
+  , lEq'
   , lNot
 
     -- ** Conditionals
