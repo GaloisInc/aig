@@ -33,6 +33,7 @@ library
     Data.AIG
     Data.AIG.Interface
     Data.AIG.Operations
+    Data.AIG.Trace
 
   default-Language: Haskell2010
   ghc-options:      -Wall -fno-ignore-asserts -auto-all -caf-all -O2
