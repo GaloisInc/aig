@@ -55,6 +55,7 @@ module Data.AIG.Operations
   , lEq
   , lEq'
   , lNot
+  , lNot'
 
     -- ** Conditionals
   , ite
@@ -368,29 +369,35 @@ iteM g c x y
 
 {-# INLINE lNot #-}
 -- | Lazy negation of a circuit.
-lNot :: IsLit l => IO (l s) -> IO (l s)
-lNot = fmap not
+lNot :: IsAIG l g => g s -> IO (l s) -> IO (l s)
+lNot g = fmap (lNot' g)
+
+{-# INLINE lNot' #-}
+lNot' :: IsAIG l g => g s -> l s -> l s
+lNot' g x | x === trueLit g = falseLit g
+          | x === falseLit g = trueLit g
+          | otherwise = not x
 
 {-# INLINE lOr #-}
 -- | Build a short-cut OR circuit.  If the left argument
 --   evaluates to the constant true, the right argument
 --   will not be evaluated.
 lOr :: IsAIG l g => g s -> IO (l s) -> IO (l s) -> IO (l s)
-lOr g x y = lNot (lAnd g (lNot x) (lNot y))
+lOr g x y = lNot g (lAnd g (lNot g x) (lNot g y))
 
 {-# INLINE lOr' #-}
 lOr' :: IsAIG l g => g s -> l s -> l s -> IO (l s)
-lOr' g x y = lNot (lAnd' g (not x) (not y))
+lOr' g x y = lNot g (lAnd' g (lNot' g x) (lNot' g y))
 
 {-# INLINE lEq #-}
 -- | Construct a lazy equality test.  If both arguments are constants,
 --   the output will also be a constant.
 lEq :: IsAIG l g => g s -> IO (l s) -> IO (l s) -> IO (l s)
-lEq g x y = lNot (lXor g x y)
+lEq g x y = lNot g (lXor g x y)
 
 {-# INLINE lEq' #-}
 lEq' :: IsAIG l g => g s -> l s -> l s -> IO (l s)
-lEq' g x y = lNot (lXor' g x y)
+lEq' g x y = lNot g (lXor' g x y)
 
 -- | Build a short-cut AND circuit.  If the left argument
 --   evaluates to the constant false, the right argument
@@ -526,13 +533,13 @@ ripple_sub_borrow g x y = go 0 (falseLit g)
          go i b | i >= n = return b
                 | otherwise = (go $! (i+1)) =<<
                                   (lOr g (lAnd' g b (y!i))
-                                         (lAnd'' g (not (x!i)) (lOr' g (y!i) b))
+                                         (lAnd'' g (lNot' g (x!i)) (lOr' g (y!i) b))
                                   )
 
 -- | Compute the 2's complement negation of a bitvector
 neg :: IsAIG l g => g s -> BV (l s) -> IO (BV (l s))
 neg g x = evalStateT (generateM_lsb0 (length x) unfold) (trueLit g)
-  where unfold i = StateT $ halfAdder g (not (x ! i))
+  where unfold i = StateT $ halfAdder g (lNot' g (x ! i))
 
 -- | Add two bitvectors with the same size.  Discard carry bit.
 add :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
@@ -561,14 +568,14 @@ addConst g x y = do
           let a = x ! i
           let b = y `testBit` i
           ac <- lAnd' g a c
-          negAnegC <- lAnd' g (not a) (not c)
+          negAnegC <- lAnd' g (lNot' g a) (lNot' g c)
           aEqC <- lOr' g ac negAnegC
           if b
             then do
               MV.write m (n-i-1) aEqC
-              adderStepM (not negAnegC) (i+1)
+              adderStepM (lNot' g negAnegC) (i+1)
             else do
-              MV.write m (n-i-1) (not aEqC)
+              MV.write m (n-i-1) (lNot' g aEqC)
               adderStepM ac (i+1)
   adderStepM (falseLit g) 0
   fmap BV $ V.freeze m
@@ -660,7 +667,7 @@ uquotRem g dividend divisor = do
           let (r,q) = splitAt n rs
            -- Subtract the divisor from the left half of the "remainder register"
           (s,b) <- ripple_sub g r divisor
-          divStep (i+1) (not b) =<< ite g b rs (s ++ q)
+          divStep (i+1) (lNot' g b) =<< ite g b rs (s ++ q)
     divStep 0 (falseLit g) initial
 
 -- Perform quotRem on the absolute value of the operands.  Then, negate the
@@ -725,11 +732,11 @@ bvEq g x y = assert (n == length y) $ go 0 (trueLit g)
 
 -- | Test if a bitvector is equal to zero
 isZero :: IsAIG l g => g s -> BV (l s) -> IO (l s)
-isZero g (BV v) = V.foldM (\x y -> and g (not x) y) (trueLit g) v
+isZero g (BV v) = V.foldM (\x y -> and g (lNot' g x) y) (trueLit g) v
 
 -- | Test if a bitvector is distinct from zero
 nonZero :: IsAIG l g => g s -> BV (l s) -> IO (l s)
-nonZero g bv = fmap not $ isZero g bv
+nonZero g bv = lNot g $ isZero g bv
 
 -- | Unsigned less-than on bitvector with the same size.
 ult :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (l s)
@@ -737,7 +744,7 @@ ult g x y = assert (length x == length y) $ ripple_sub_borrow g x y
 
 -- | Unsigned less-than-or-equal on bitvector with the same size.
 ule :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (l s)
-ule g x y = not <$> ult g y x
+ule g x y = lNot g $ ult g y x
 
 -- | Signed less-than on bitvector with the same size.
 slt :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (l s)
@@ -745,15 +752,15 @@ slt g x y = assert (length x == length y) $ do
   let xs = x `at` 0
   let ys = y `at` 0
   -- x is negative and y is positive.
-  c0 <- and g xs (not ys)
+  c0 <- and g xs (lNot' g ys)
   -- x is positive and y is negative.
-  c1 <- and g (not xs) ys
-  c2 <- and g (not c1) =<< ult g (tail x) (tail y)
+  c1 <- and g (lNot' g xs) ys
+  c2 <- and g (lNot' g c1) =<< ult g (tail x) (tail y)
   or g c0 c2
 
 -- | Signed less-than-or-equal on bitvector with the same size.
 sle :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (l s)
-sle g x y = not <$> slt g y x
+sle g x y = lNot g $ slt g y x
 
 -- | @sext v n@ sign extends @v@ to be a vector with length @n@.
 -- This function requires that @n >= length v@ and @length v > 0@.
