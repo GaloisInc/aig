@@ -36,7 +36,8 @@ library
     Data.AIG.Trace
 
   default-Language: Haskell2010
-  ghc-options:      -Wall -fno-ignore-asserts -auto-all -caf-all -O2
+  ghc-options:      -Wall -fno-ignore-asserts -O2
+  ghc-prof-options: -prof -auto-all -caf-all
   build-depends:
     base == 4.*,
     mtl,
