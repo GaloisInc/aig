@@ -1,5 +1,5 @@
 Name:               aig
-Version:            0.1.0.0
+Version:            0.1.9.9
 License:            BSD3
 License-file:       LICENSE
 Author:             Galois Inc.
@@ -34,13 +34,16 @@ library
     Data.AIG
     Data.AIG.Interface
     Data.AIG.Operations
+    Data.AIG.Trace
 
   default-Language: Haskell2010
-  ghc-options:      -Wall
+  ghc-options:      -Wall -fno-ignore-asserts -O2
+  ghc-prof-options: -prof -auto-all -caf-all
   build-depends:
     base == 4.*,
     mtl,
-    vector
+    vector,
+    QuickCheck >= 2.7
 
 -- Ugh. Temporary fix to make Hackage happy.
 --  if flag(enable-hpc)

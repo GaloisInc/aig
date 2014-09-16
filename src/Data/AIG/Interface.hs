@@ -1,6 +1,7 @@
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE Rank2Types #-}
+{-# LANGUAGE DeriveFunctor #-}
 
 {- |
 Module      : Data.AIG.Interface
@@ -17,6 +18,7 @@ module Data.AIG.Interface
   ( -- * Main interface classes
     IsLit(..)
   , IsAIG(..)
+  , lazyMux
 
     -- * Helper datatypes
   , Proxy(..)
@@ -24,16 +26,50 @@ module Data.AIG.Interface
   , Network(..)
   , networkInputCount
 
+  -- * Literal representations
+  , LitView(..)
+  , LitTree(..)
+  , toLitTree
+  , fromLitTree
+  , toLitForest
+  , fromLitForest
+  , foldAIG
+  , foldAIGs
+  , unfoldAIG
+  , unfoldAIGs
+
     -- * Representations of prover results
   , SatResult(..)
   , VerifyResult(..)
   , toSatResult
   , toVerifyResult
+
+    -- * QuickCheck generators and testing
+  , genLitView
+  , genLitTree
+  , getMaxInput
+  , buildNetwork
+  , randomNetwork
   ) where
 
-import Control.Applicative ((<$>))
+import Control.Applicative
 import Control.Monad
 import Prelude hiding (not, and, or)
+import Test.QuickCheck (Gen, Arbitrary(..), generate, oneof, sized, choose)
+
+-- | Concrete datatype representing the ways
+--   an AIG can be constructed.
+data LitView a
+  = And !a !a
+  | NotAnd !a !a
+  | Input !Int
+  | NotInput !Int
+  | TrueLit
+  | FalseLit
+ deriving (Eq,Show,Ord,Functor)
+
+newtype LitTree = LitTree { unLitTree :: LitView LitTree }
+ deriving (Eq,Show,Ord)
 
 class IsLit l where
   -- | Negate a literal.
@@ -163,6 +199,82 @@ class IsLit l => IsAIG l g | g -> l where
     f <- evaluator g inputs
     return (f <$> outputs)
 
+  -- | Build an evaluation function over an AIG using the provided view function
+  abstractEvaluateAIG
+          :: g s
+          -> (LitView a -> IO a)
+          -> IO (l s -> IO a)
+
+-- | Evaluate the given literal using the provided view function
+foldAIG :: IsAIG l g
+        => g s
+        -> (LitView a -> IO a)
+        -> l s
+        -> IO a
+foldAIG n view l = do
+   eval <- abstractEvaluateAIG n view
+   eval l
+
+-- | Evaluate the given list of literals using the provided view function
+foldAIGs :: IsAIG l g
+        => g s
+        -> (LitView a -> IO a)
+        -> [l s]
+        -> IO [a]
+foldAIGs n view ls = do
+   eval <- abstractEvaluateAIG n view
+   mapM eval ls
+
+
+-- | Build an AIG literal by unfolding a constructor function
+unfoldAIG :: IsAIG l g
+          => g s
+          -> (a -> IO (LitView a))
+          -> a -> IO (l s)
+unfoldAIG n unfold = f
+ where f = unfold >=> g
+       g (And x y)    = and' (f x) (f y)
+       g (NotAnd x y) = fmap not $ and' (f x) (f y)
+       g (Input i)    = getInput n i
+       g (NotInput i) = fmap not $ getInput n i
+       g TrueLit      = return $ trueLit n
+       g FalseLit     = return $ falseLit n
+       and' mx my = do
+          x <- mx
+          y <- my
+          and n x y
+
+-- | Build a list of AIG literals by unfolding a constructor function
+unfoldAIGs :: IsAIG l g
+          => g s
+          -> (a -> IO (LitView a))
+          -> [a] -> IO [l s]
+unfoldAIGs n unfold = mapM (unfoldAIG n unfold)
+
+-- | Extract a tree representation of the given literal
+toLitTree :: IsAIG l g => g s -> l s -> IO LitTree
+toLitTree g = foldAIG g (return . LitTree)
+
+-- | Construct an AIG literal from a tree representation
+fromLitTree :: IsAIG l g => g s -> LitTree -> IO (l s)
+fromLitTree g = unfoldAIG g (return . unLitTree)
+
+-- | Extract a forest representation of the given list of literal s
+toLitForest :: IsAIG l g => g s -> [l s] -> IO [LitTree]
+toLitForest g = foldAIGs g (return . LitTree)
+
+-- | Construct a list of AIG literals from a forest representation
+fromLitForest :: IsAIG l g => g s -> [LitTree] -> IO [l s]
+fromLitForest g = unfoldAIGs g (return . unLitTree)
+
+-- | Short-cutting mux operator that optimizes the case
+--   where the test bit is a concrete literal
+lazyMux :: IsAIG l g => g s -> l s -> IO (l s) -> IO (l s) -> IO (l s)
+lazyMux g c
+  | c === (trueLit g)  = \x _y -> x
+  | c === (falseLit g) = \_x y -> y
+  | otherwise = \x y -> join $ pure (mux g c) <*> x <*> y
+
 -- | A network is an and-inverstor graph paired with it's outputs,
 --   thus representing a complete combinational circuit.
 data Network l g where
@@ -185,20 +297,83 @@ withSomeGraph (SomeGraph g) f = f g
 data SatResult
    = Unsat
    | Sat !([Bool])
+   | SatUnknown
   deriving (Eq,Show)
 
 -- | Result of a verification check.
 data VerifyResult
    = Valid
    | Invalid [Bool]
+   | VerifyUnknown
   deriving (Eq, Show)
 
 -- | Convert a sat result to a verify result by negating it.
 toVerifyResult :: SatResult -> VerifyResult
 toVerifyResult Unsat = Valid
 toVerifyResult (Sat l) = Invalid l
+toVerifyResult SatUnknown = VerifyUnknown
 
 -- | Convert a verify result to a sat result by negating it.
 toSatResult :: VerifyResult -> SatResult
 toSatResult Valid = Unsat
 toSatResult (Invalid l) = Sat l
+toSatResult VerifyUnknown = SatUnknown
+
+-- | Generate an arbitrary `LitView` given a generator for `a`
+genLitView :: Gen a -> Gen (LitView a)
+genLitView gen = oneof
+     [ return TrueLit
+     , return FalseLit
+     , sized $ \n -> choose (0,n-1) >>= \i -> return (Input i)
+     , sized $ \n -> choose (0,n-1) >>= \i -> return (NotInput i)
+     , do x <- gen
+          y <- gen
+          return (And x y)
+     , do x <- gen
+          y <- gen
+          return (NotAnd x y)
+     ]
+
+-- | Generate an arbitrary `LitTree`
+genLitTree :: Gen LitTree
+genLitTree = fmap LitTree $ genLitView genLitTree
+
+-- | Given a LitTree, calculate the maximum input number in the tree.
+--   Returns 0 if no inputs are referenced.
+getMaxInput :: LitTree -> Int
+getMaxInput (LitTree x) =
+  case x of
+     TrueLit -> 0
+     FalseLit -> 0
+     Input i -> i
+     NotInput i -> i
+     And a b -> max (getMaxInput a) (getMaxInput b)
+     NotAnd a b -> max (getMaxInput a) (getMaxInput b)
+
+instance Arbitrary LitTree where
+  arbitrary = genLitTree
+  shrink (LitTree TrueLit)      = []
+  shrink (LitTree FalseLit)     = []
+  shrink (LitTree (Input _))    = [LitTree TrueLit, LitTree FalseLit]
+  shrink (LitTree (NotInput _)) = [LitTree TrueLit, LitTree FalseLit]
+  shrink (LitTree (And x y)) =
+      [ LitTree TrueLit, LitTree FalseLit, x, y ] ++
+      [ LitTree (And x' y') | (x',y') <- shrink (x,y) ]
+  shrink (LitTree (NotAnd x y)) =
+      [ LitTree TrueLit, LitTree FalseLit, x, y ] ++
+      [ LitTree (NotAnd x' y') | (x',y') <- shrink (x,y) ]
+
+
+-- | Given a list of LitTree, construct a corresponding AIG network
+buildNetwork :: IsAIG l g => Proxy l g -> [LitTree] -> IO (Network l g)
+buildNetwork proxy litForrest = do
+   let maxInput = foldr max 0 $ map getMaxInput litForrest
+   (SomeGraph g) <- newGraph proxy
+   forM_ [0..maxInput] (\_ -> newInput g)
+   ls <- fromLitForest g litForrest
+   return (Network g ls)
+
+-- | Generate a random network by building a random `LitTree`
+--   and using that to construct a network.
+randomNetwork :: IsAIG l g => Proxy l g -> IO (Network l g)
+randomNetwork proxy = generate arbitrary >>= buildNetwork proxy
