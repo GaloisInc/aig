@@ -1,5 +1,3 @@
-{-# LANGUAGE ScopedTypeVariables #-}
-
 {- |
 Module      : Data.AIG.Operations
 Copyright   : (c) Galois, Inc. 2014
@@ -11,7 +9,10 @@ Portability : portable
 A collection of higher-level operations (mostly 2's complement arithmetic operations)
 that can be built from the primitive And-Inverter Graph interface.
 -}
-
+{-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveFoldable #-}
+{-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Data.AIG.Operations
   ( -- * Bitvectors
     BV
@@ -25,7 +26,6 @@ module Data.AIG.Operations
   , drop
   , slice
   , sliceRev
-  , mapM
   , zipWith
   , zipWithM
   , msb
@@ -119,10 +119,13 @@ import Control.Exception
 import qualified Control.Monad
 import Control.Monad.State hiding (zipWithM, replicateM, mapM)
 import Data.Bits ((.|.), setBit, shiftL, testBit)
+import Data.Foldable (Foldable)
+import Data.Traversable (Traversable)
 import qualified Data.Vector as V
 import qualified Data.Vector.Generic.Mutable as MV
 
-import Prelude hiding (and, concat, length, not, or, replicate, splitAt, tail, (++), take, drop, zipWith, mapM)
+import Prelude
+  hiding (and, concat, length, not, or, replicate, splitAt, tail, (++), take, drop, zipWith, mapM)
 import qualified Prelude
 
 import Data.AIG.Interface
@@ -131,10 +134,13 @@ import Data.AIG.Interface
 -- | A BitVector consists of a sequence of symbolic bits and can be used
 --   for symbolic machine-word arithmetic.
 newtype BV l = BV { unBV :: V.Vector l }
-  deriving (Eq, Ord, Show)
-
-instance Functor BV where
-  fmap f (BV v) = BV (f <$> v)
+  deriving ( Eq
+           , Ord
+           , Show
+           , Functor
+           , Foldable
+           , Traversable
+           )
 
 -- | Empty bitvector
 empty :: BV l
@@ -267,10 +273,6 @@ sliceRev
       -> BV l
 sliceRev (BV v) i n = BV (V.slice i' n v)
   where i' = V.length v - i - n
-
--- | Apply a monadic operation to each element of a bitvector in sequence
-mapM :: Monad m => (a -> m b) -> BV a -> m (BV b)
-mapM f (BV x) = V.mapM f x >>= return . BV
 
 -- | Combine two bitvectors with a bitwise function
 zipWith :: (l -> l -> l) -> BV l -> BV l -> BV l
