@@ -19,11 +19,6 @@ Description:
   These interfaces allow clients to write code that can create
   and use AIGs without depending on a particular AIG package.
 
--- Ugh. Temporary fix to make Hackage happy.
---flag enable-hpc
---  Description: Collect HPC coverage information.
---  Default: False
-
 source-repository head
   type: git
   location: https://github.com/GaloisInc/aig.git
@@ -38,13 +33,9 @@ library
 
   default-Language: Haskell2010
   ghc-options:      -Wall -fno-ignore-asserts -O2
-  ghc-prof-options: -prof -auto-all -caf-all
   build-depends:
     base == 4.*,
     mtl,
     vector,
     QuickCheck >= 2.7
 
--- Ugh. Temporary fix to make Hackage happy.
---  if flag(enable-hpc)
---    ghc-options: -fhpc -hpcdir .hpc
