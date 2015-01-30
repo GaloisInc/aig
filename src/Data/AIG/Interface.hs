@@ -25,7 +25,7 @@ module Data.AIG.Interface
   , SomeGraph(..)
   , Network(..)
   , networkInputCount
-
+  , networkOutputCount
   -- * Literal representations
   , LitView(..)
   , LitTree(..)
@@ -275,13 +275,18 @@ lazyMux g c
   | c === (falseLit g) = \_x y -> y
   | otherwise = \x y -> join $ pure (mux g c) <*> x <*> y
 
--- | A network is an and-inverstor graph paired with it's outputs,
---   thus representing a complete combinational circuit.
+-- | A network is an and-invertor graph paired with it's outputs,
+-- thus representing a complete combinational circuit.
 data Network l g where
    Network :: IsAIG l g => g s -> [l s] -> Network l g
 
+-- | Get number of inputs associated with current network.
 networkInputCount :: Network l g -> IO Int
 networkInputCount (Network g _) = inputCount g
+
+-- | Number of outputs associated with a network.
+networkOutputCount :: Network l g -> Int
+networkOutputCount (Network _ o) = length o
 
 -- | Some graph quantifies over the state phantom variable for a graph.
 data SomeGraph g where
