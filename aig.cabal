@@ -4,7 +4,7 @@ License:            BSD3
 License-file:       LICENSE
 Author:             Galois Inc.
 Maintainer:         jhendrix@galois.com
-Copyright:          (c) 2014 Galois Inc.
+Copyright:          (c) 2014-2015 Galois Inc.
 Category:           Data
 build-type:         Simple
 cabal-Version:      >= 1.10
@@ -38,4 +38,3 @@ library
     mtl,
     vector,
     QuickCheck >= 2.7
-
