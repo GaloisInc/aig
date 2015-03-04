@@ -734,7 +734,7 @@ bvEq g x y = assert (n == length y) $ go 0 (trueLit g)
 
 -- | Test if a bitvector is equal to zero
 isZero :: IsAIG l g => g s -> BV (l s) -> IO (l s)
-isZero g (BV v) = V.foldM (\x y -> and g (lNot' g x) y) (trueLit g) v
+isZero g (BV v) = V.foldM (\x y -> and g x (lNot' g y)) (trueLit g) v
 
 -- | Test if a bitvector is distinct from zero
 nonZero :: IsAIG l g => g s -> BV (l s) -> IO (l s)
