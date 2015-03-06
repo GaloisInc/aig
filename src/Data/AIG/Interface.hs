@@ -180,6 +180,12 @@ class IsLit l => IsAIG l g | g -> l where
   -- | Write network out to AIGER file.
   writeAiger :: FilePath -> Network l g -> IO ()
 
+  -- | Write network out to DIMACS CNF file.
+  -- Returns vector mapping combinational inputs to CNF Variable
+  -- numbers.
+  writeCNF :: g s -> l s -> FilePath -> IO [Int]
+  -- TODO: add default implementation in terms of 'abstractEvalAIG'.
+
   -- | Check if literal is satisfiable in network.
   checkSat :: g s -> l s -> IO SatResult
 
