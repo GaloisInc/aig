@@ -126,8 +126,13 @@ instance TraceOutput l g SatResult where
 instance TraceOutput l g VerifyResult where
   traceOutput _g r = show r
 
-
-
+instance TraceOutput l g x => TraceOutput l g (LitView x) where
+  traceOutput g (And x y)    = "And ("++traceOutput g x++") ("++traceOutput g y++")"
+  traceOutput g (NotAnd x y) = "NotAnd ("++traceOutput g x++") ("++traceOutput g y++")"
+  traceOutput _ (Input i)    = "Input "++show i
+  traceOutput _ (NotInput i) = "NotInput "++show i
+  traceOutput _ TrueLit      = "TrueLit"
+  traceOutput _ FalseLit     = "FalseLit"
 
 withNewGraphTracing :: (IsAIG l g, Traceable l)
                     => Proxy l g
@@ -186,6 +191,8 @@ instance (IsAIG l g, Traceable l) => IsAIG (TraceLit l) (TraceGraph l g) where
                      Just h  -> seq (unsafePerformIO (traceIO l x h)) x
            ev <- evaluator (tGraph g) ins
            return (\(TraceLit l) -> trace l $ ev l)
+
+  litView g = traceOp g "litView" $ \(TraceLit l) -> fmap (fmap TraceLit) (litView (tGraph g) l)
 
   abstractEvaluateAIG g f =
         do mh <- readIORef (tActive g)

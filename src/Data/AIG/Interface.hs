@@ -209,6 +209,9 @@ class IsLit l => IsAIG l g | g -> l where
     f <- evaluator g inputs
     return (f <$> outputs)
 
+  -- | Examine the outermost structure of a literal to see how it was constructed
+  litView :: g s -> l s -> IO (LitView (l s))
+
   -- | Build an evaluation function over an AIG using the provided view function
   abstractEvaluateAIG
           :: g s
