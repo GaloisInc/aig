@@ -2,6 +2,8 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE Rank2Types #-}
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveFoldable #-}
+{-# LANGUAGE DeriveTraversable #-}
 
 {- |
 Module      : Data.AIG.Interface
@@ -54,6 +56,8 @@ module Data.AIG.Interface
 
 import Control.Applicative
 import Control.Monad
+import Data.Traversable (Traversable)
+import Data.Foldable (Foldable)
 import Prelude hiding (not, and, or)
 import Test.QuickCheck (Gen, Arbitrary(..), generate, oneof, sized, choose)
 
@@ -66,7 +70,7 @@ data LitView a
   | NotInput !Int
   | TrueLit
   | FalseLit
- deriving (Eq,Show,Ord,Functor)
+ deriving (Eq,Show,Ord,Functor,Foldable,Traversable)
 
 newtype LitTree = LitTree { unLitTree :: LitView LitTree }
  deriving (Eq,Show,Ord)
