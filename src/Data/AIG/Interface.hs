@@ -1,10 +1,3 @@
-{-# LANGUAGE FunctionalDependencies #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE Rank2Types #-}
-{-# LANGUAGE DeriveFunctor #-}
-{-# LANGUAGE DeriveFoldable #-}
-{-# LANGUAGE DeriveTraversable #-}
-
 {- |
 Module      : Data.AIG.Interface
 Copyright   : (c) Galois, Inc. 2014
@@ -15,7 +8,13 @@ Portability : portable
 
 Interfaces for building, simulating and analysing And-Inverter Graphs (AIG).
 -}
-
+{-# LANGUAGE CPP #-}
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE Rank2Types #-}
+{-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveFoldable #-}
+{-# LANGUAGE DeriveTraversable #-}
 module Data.AIG.Interface
   ( -- * Main interface classes
     IsLit(..)
@@ -56,10 +55,13 @@ module Data.AIG.Interface
 
 import Control.Applicative
 import Control.Monad
-import Data.Traversable (Traversable)
-import Data.Foldable (Foldable)
 import Prelude hiding (not, and, or)
 import Test.QuickCheck (Gen, Arbitrary(..), generate, oneof, sized, choose)
+
+#if !MIN_VERSION_base(4,8,0)
+import Data.Foldable (Foldable)
+import Data.Traversable (Traversable)
+#endif
 
 -- | Concrete datatype representing the ways
 --   an AIG can be constructed.
