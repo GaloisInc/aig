@@ -85,8 +85,7 @@ class IsLit l where
 data Proxy l g where
   Proxy :: IsAIG l g => (forall a . a -> a) -> Proxy l g
 
--- | An And-Inverter-Graph is a data structure storing bit-level
--- nodes.
+-- | An And-Inverter-Graph is a data structure storing bit-level nodes.
 --
 -- Graphs are and-inverter graphs, which contain a number of input
 -- literals and Boolean operations for creating new literals.
