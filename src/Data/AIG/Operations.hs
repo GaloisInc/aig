@@ -9,6 +9,7 @@ Portability : portable
 A collection of higher-level operations (mostly 2's complement arithmetic operations)
 that can be built from the primitive And-Inverter Graph interface.
 -}
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveFoldable #-}
 {-# LANGUAGE DeriveTraversable #-}
@@ -119,8 +120,6 @@ import Control.Exception
 import qualified Control.Monad
 import Control.Monad.State hiding (zipWithM, replicateM, mapM)
 import Data.Bits ((.|.), setBit, shiftL, testBit)
-import Data.Foldable (Foldable)
-import Data.Traversable (Traversable)
 import qualified Data.Vector as V
 import qualified Data.Vector.Generic.Mutable as MV
 
@@ -130,6 +129,10 @@ import qualified Prelude
 
 import Data.AIG.Interface
 
+#if !MIN_VERSION_base(4,8,0)
+import Data.Foldable (Foldable)
+import Data.Traversable (Traversable)
+#endif
 
 -- | A BitVector consists of a sequence of symbolic bits and can be used
 --   for symbolic machine-word arithmetic.
