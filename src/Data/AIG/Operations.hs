@@ -117,13 +117,15 @@ module Data.AIG.Operations
   , countLeadingZeros
   , countTrailingZeros
 
-    -- * Polynomial multiplication and modulus
+    -- * Polynomial multiplication, division and modulus in the finite
+    --   Galois Field GF(2^n)
   , pmul
+  , pdiv
   , pmod
   ) where
 
 import Control.Applicative hiding (empty)
-import Control.Exception
+import Control.Exception (assert)
 import qualified Control.Monad
 import Control.Monad.State hiding (zipWithM, replicateM, mapM)
 import Data.Bits ((.|.), setBit, shiftL, testBit)
@@ -913,9 +915,9 @@ logBase2_down g bv = do
 --   For x > 1, this uniquely satisfies 2^(logBase2_up(x) - 1) < x <= 2^(logBase2_up(x)).
 --   For x = 1, logBase2_up 1 = 0.
 --   For x = 0, we get logBase2_up 0 = <input bitvector length>; this just
---   happens to work out from the defining fomula `logBase2_up x = logBase2_down (x-1) + 1`
---   when interpreted in 2's complement.  However, it is convenient because it gives
---   the correct answer when used to count trailing zeros.
+--   happens to work out from the defining fomula
+--   `logBase2_up x = logBase2_down (x-1) + 1`
+--   when interpreted in 2's complement.
 --   The output bitvector has the same width as the input bitvector.
 logBase2_up
         :: IsAIG l g
@@ -954,10 +956,8 @@ countTrailingZeros
         => g s
         -> BV (l s)  -- ^ input bitvector
         -> IO (BV (l s))
-countTrailingZeros g x = do
-   negX <- neg g x
-   z <- zipWithM (lAnd' g) x negX
-   logBase2_up g z
+countTrailingZeros g (BV v) = do
+   countLeadingZeros g (BV (V.reverse v))
 
 -- | Given positive x, find the unique i such that: 2^i <= x < 2^(i+1)
 --   This is the floor of the lg2 function.  We extend the function so
@@ -1096,6 +1096,8 @@ pmul g x y = generateM_msb0 (max 0 (m + n - 1)) coeff
 
 -- | Polynomial mod with symbolic modulus. Return value has length one
 -- less than the length of the modulus.
+-- This implementation is optimized for the (common) case where the modulus
+-- is concrete.
 pmod :: forall l g s. IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
 pmod g x y = findmsb (bvToList y)
   where
@@ -1133,3 +1135,62 @@ pmod g x y = findmsb (bvToList y)
               acc' <- Control.Monad.zipWithM (xor g) px acc
               p' <- next p
               go (i+1) p' acc'
+
+
+-- | Polynomial division. Return value has length
+--   equal to the first argument.
+pdiv :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
+pdiv g x y = do
+  (q,_) <- pdivmod g x y
+  return q
+
+-- Polynomial div/mod: resulting lengths are as in Cryptol.
+
+-- TODO: probably this function should be disentangled to only compute
+-- division, given that we have a separate polynomial modulus algorithm.
+pdivmod :: forall l g s. IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s), BV (l s))
+pdivmod g x y = findmsb (bvToList y)
+  where
+    findmsb :: [l s] -> IO (BV (l s), BV (l s))
+    findmsb (c : cs) = lmuxPair c (usemask cs) (findmsb cs)
+    findmsb [] = return (x, replicate (length y - 1) (falseLit g)) -- division by zero
+
+    usemask :: [l s] -> IO (BV (l s), BV (l s))
+    usemask mask = do
+      (qs, rs) <- pdivmod_helper g (bvToList x) mask
+      let z = falseLit g
+      let qs' = Prelude.map (const z) rs Prelude.++ qs
+      let rs' = Prelude.replicate (length y - 1 - Prelude.length rs) z Prelude.++ rs
+      let q = BV $ V.fromList qs'
+      let r = BV $ V.fromList rs'
+      return (q, r)
+
+    lmuxPair :: l s -> IO (BV (l s), BV (l s)) -> IO (BV (l s), BV (l s)) -> IO (BV (l s), BV (l s))
+    lmuxPair c a b
+      | c === trueLit g  = a
+      | c === falseLit g = b
+      | otherwise = join (muxPair c <$> a <*> b)
+
+    muxPair :: l s -> (BV (l s), BV (l s)) -> (BV (l s), BV (l s)) -> IO (BV (l s), BV (l s))
+    muxPair c (x1, y1) (x2, y2) = (,) <$> zipWithM (mux g c) x1 x2 <*> zipWithM (mux g c) y1 y2
+
+-- Divide ds by (1 : mask), giving quotient and remainder. All
+-- arguments and results are big-endian. Remainder has the same length
+-- as mask (but limited by length ds); total length of quotient ++
+-- remainder = length ds.
+pdivmod_helper :: forall l g s. IsAIG l g => g s -> [l s] -> [l s] -> IO ([l s], [l s])
+pdivmod_helper g ds mask = go (Prelude.length ds - Prelude.length mask) ds
+  where
+    go :: Int -> [l s] -> IO ([l s], [l s])
+    go n cs | n <= 0 = return ([], cs)
+    go _ []          = fail "Data.AIG.Operations.pdiv: impossible"
+    go n (c : cs)    = do cs' <- mux_add c cs mask
+                          (qs, rs) <- go (n - 1) cs'
+                          return (c : qs, rs)
+
+    mux_add :: l s -> [l s] -> [l s] -> IO [l s]
+    mux_add c (x : xs) (y : ys) = do z <- lazyMux g c (xor g x y) (return x)
+                                     zs <- mux_add c xs ys
+                                     return (z : zs)
+    mux_add _ []       (_ : _ ) = fail "Data.AIG.Operations.pdiv: impossible"
+    mux_add _ xs       []       = return xs
