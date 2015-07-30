@@ -22,6 +22,7 @@ module Data.AIG.Trace where
 
 import Prelude hiding (not, and, or)
 import Data.IORef
+import Data.List (intersperse)
 import System.IO
 import Control.Exception
 import System.IO.Unsafe
@@ -106,6 +107,10 @@ instance TraceOutput l g x => TraceOp l g (IO x) where
             hFlush h
             return x
 
+instance TraceOutput l g a => TraceOutput l g [a] where
+  traceOutput g xs =
+     "[" ++ concat (intersperse ", " (map (traceOutput g) xs)) ++ "]"
+
 instance TraceOutput l g (TraceLit l s) where
   traceOutput _g (TraceLit l) = showLit l
 
@@ -120,6 +125,14 @@ instance TraceOutput l g SatResult where
 
 instance TraceOutput l g VerifyResult where
   traceOutput _g r = show r
+
+instance TraceOutput l g x => TraceOutput l g (LitView x) where
+  traceOutput g (And x y)    = "And ("++traceOutput g x++") ("++traceOutput g y++")"
+  traceOutput g (NotAnd x y) = "NotAnd ("++traceOutput g x++") ("++traceOutput g y++")"
+  traceOutput _ (Input i)    = "Input "++show i
+  traceOutput _ (NotInput i) = "NotInput "++show i
+  traceOutput _ TrueLit      = "TrueLit"
+  traceOutput _ FalseLit     = "FalseLit"
 
 withNewGraphTracing :: (IsAIG l g, Traceable l)
                     => Proxy l g
@@ -157,6 +170,9 @@ instance (IsAIG l g, Traceable l) => IsAIG (TraceLit l) (TraceGraph l g) where
   writeAiger fp0 (Network g outs0) =
        (traceOp g "writeAiger" $ \fp outs -> writeAiger fp (Network (tGraph g) (map unTraceLit outs))) fp0 outs0
 
+  writeCNF g =
+       traceOp g "writeCNF" $ \out fp -> writeCNF (tGraph g) (unTraceLit out) fp
+
   checkSat g = traceOp g "checkSat" $ \(TraceLit x) -> checkSat (tGraph g) x
 
   cec (Network g1 outs1') (Network g2 outs2') =
@@ -175,6 +191,8 @@ instance (IsAIG l g, Traceable l) => IsAIG (TraceLit l) (TraceGraph l g) where
                      Just h  -> seq (unsafePerformIO (traceIO l x h)) x
            ev <- evaluator (tGraph g) ins
            return (\(TraceLit l) -> trace l $ ev l)
+
+  litView g = traceOp g "litView" $ \(TraceLit l) -> fmap (fmap TraceLit) (litView (tGraph g) l)
 
   abstractEvaluateAIG g f =
         do mh <- readIORef (tActive g)

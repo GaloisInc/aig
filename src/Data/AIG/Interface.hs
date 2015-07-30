@@ -1,8 +1,3 @@
-{-# LANGUAGE FunctionalDependencies #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE Rank2Types #-}
-{-# LANGUAGE DeriveFunctor #-}
-
 {- |
 Module      : Data.AIG.Interface
 Copyright   : (c) Galois, Inc. 2014
@@ -13,7 +8,13 @@ Portability : portable
 
 Interfaces for building, simulating and analysing And-Inverter Graphs (AIG).
 -}
-
+{-# LANGUAGE CPP #-}
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE Rank2Types #-}
+{-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveFoldable #-}
+{-# LANGUAGE DeriveTraversable #-}
 module Data.AIG.Interface
   ( -- * Main interface classes
     IsLit(..)
@@ -57,6 +58,11 @@ import Control.Monad
 import Prelude hiding (not, and, or)
 import Test.QuickCheck (Gen, Arbitrary(..), generate, oneof, sized, choose)
 
+#if !MIN_VERSION_base(4,8,0)
+import Data.Foldable (Foldable)
+import Data.Traversable (Traversable)
+#endif
+
 -- | Concrete datatype representing the ways
 --   an AIG can be constructed.
 data LitView a
@@ -66,7 +72,7 @@ data LitView a
   | NotInput !Int
   | TrueLit
   | FalseLit
- deriving (Eq,Show,Ord,Functor)
+ deriving (Eq,Show,Ord,Functor,Foldable,Traversable)
 
 newtype LitTree = LitTree { unLitTree :: LitView LitTree }
  deriving (Eq,Show,Ord)
@@ -85,8 +91,7 @@ class IsLit l where
 data Proxy l g where
   Proxy :: IsAIG l g => (forall a . a -> a) -> Proxy l g
 
--- | An And-Inverter-Graph is a data structure storing bit-level
--- nodes.
+-- | An And-Inverter-Graph is a data structure storing bit-level nodes.
 --
 -- Graphs are and-inverter graphs, which contain a number of input
 -- literals and Boolean operations for creating new literals.
@@ -180,6 +185,12 @@ class IsLit l => IsAIG l g | g -> l where
   -- | Write network out to AIGER file.
   writeAiger :: FilePath -> Network l g -> IO ()
 
+  -- | Write network out to DIMACS CNF file.
+  -- Returns vector mapping combinational inputs to CNF Variable
+  -- numbers.
+  writeCNF :: g s -> l s -> FilePath -> IO [Int]
+  -- TODO: add default implementation in terms of 'abstractEvalAIG'.
+
   -- | Check if literal is satisfiable in network.
   checkSat :: g s -> l s -> IO SatResult
 
@@ -198,6 +209,9 @@ class IsLit l => IsAIG l g | g -> l where
   evaluate (Network g outputs) inputs = do
     f <- evaluator g inputs
     return (f <$> outputs)
+
+  -- | Examine the outermost structure of a literal to see how it was constructed
+  litView :: g s -> l s -> IO (LitView (l s))
 
   -- | Build an evaluation function over an AIG using the provided view function
   abstractEvaluateAIG

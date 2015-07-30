@@ -9,6 +9,7 @@ Portability : portable
 A collection of higher-level operations (mostly 2's complement arithmetic operations)
 that can be built from the primitive And-Inverter Graph interface.
 -}
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveFoldable #-}
 {-# LANGUAGE DeriveTraversable #-}
@@ -109,18 +110,30 @@ module Data.AIG.Operations
   , zeroIntCoerce
   , signIntCoerce
 
-    -- * Polynomial multiplication and modulus
+    -- * Priority encoder, lg2, and related functions
+  , priorityEncode
+  , logBase2_down
+  , logBase2_up
+  , countLeadingZeros
+  , countTrailingZeros
+
+    -- * Polynomial multiplication, division and modulus in the finite
+    --   Galois Field GF(2^n)
   , pmul
+  , pdiv
   , pmod
   ) where
 
 import Control.Applicative hiding (empty)
-import Control.Exception
+import Control.Exception (assert)
 import qualified Control.Monad
 import Control.Monad.State hiding (zipWithM, replicateM, mapM)
 import Data.Bits ((.|.), setBit, shiftL, testBit)
-import Data.Foldable (Foldable)
-import Data.Traversable (Traversable)
+
+#if MIN_VERSION_base(4,8,0)
+import qualified Data.Bits as Bits
+#endif
+
 import qualified Data.Vector as V
 import qualified Data.Vector.Generic.Mutable as MV
 
@@ -130,9 +143,14 @@ import qualified Prelude
 
 import Data.AIG.Interface
 
+#if !MIN_VERSION_base(4,8,0)
+import Data.Foldable (Foldable)
+import Data.Traversable (Traversable)
+#endif
 
 -- | A BitVector consists of a sequence of symbolic bits and can be used
---   for symbolic machine-word arithmetic.
+--   for symbolic machine-word arithmetic.  Bits are stored in
+--   most-significant-bit first order.
 newtype BV l = BV { unBV :: V.Vector l }
   deriving ( Eq
            , Ord
@@ -734,7 +752,7 @@ bvEq g x y = assert (n == length y) $ go 0 (trueLit g)
 
 -- | Test if a bitvector is equal to zero
 isZero :: IsAIG l g => g s -> BV (l s) -> IO (l s)
-isZero g (BV v) = V.foldM (\x y -> and g (lNot' g x) y) (trueLit g) v
+isZero g (BV v) = V.foldM (\x y -> and g x (lNot' g y)) (trueLit g) v
 
 -- | Test if a bitvector is distinct from zero
 nonZero :: IsAIG l g => g s -> BV (l s) -> IO (l s)
@@ -878,6 +896,189 @@ ror g x y = do
   r <- urem g y (bvFromInteger g (length y) (toInteger (length x)))
   muxInteger (iteM g) (length x - 1) r (return . rorC x)
 
+
+-- | Compute the rounded-down base2 logarithm of the input bitvector.
+--   For x > 0, this uniquely satisfies 2^(logBase2_down(x)) <= x < 2^(logBase2_down(x)+1).
+--   For x = 0, we set logBase2(x) = -1.
+--   The output bitvector has the same width as the input bitvector.
+logBase2_down
+        :: IsAIG l g
+        => g s
+        -> BV (l s)  -- ^ input bitvector
+        -> IO (BV (l s))
+logBase2_down g bv = do
+   (v, c) <- priorityEncode g (length bv) bv
+   iteM g v (return c)
+            (return (bvFromInteger g (length bv) (-1)))
+
+-- | Compute the rounded-up base2 logarithm of the input bitvector.
+--   For x > 1, this uniquely satisfies 2^(logBase2_up(x) - 1) < x <= 2^(logBase2_up(x)).
+--   For x = 1, logBase2_up 1 = 0.
+--   For x = 0, we get logBase2_up 0 = <input bitvector length>; this just
+--   happens to work out from the defining fomula
+--   `logBase2_up x = logBase2_down (x-1) + 1`
+--   when interpreted in 2's complement.
+--   The output bitvector has the same width as the input bitvector.
+logBase2_up
+        :: IsAIG l g
+        => g s
+        -> BV (l s)  -- ^ input bitvector
+        -> IO (BV (l s))
+logBase2_up g bv = do
+   bv' <- subConst g bv 1
+   i <- logBase2_down g bv'
+   addConst g i 1
+
+-- | Count the number of leading zeros in the input vector; that is,
+--   the number of more-significant digits set to 0 above the most
+--   significant digit that is set.  If the input vector is 0, the output of
+--   this function is the length of the bitvector (i.e., all digits are
+--   counted as leading zeros).
+--   The output bitvector has the same width as the input bitvector.
+countLeadingZeros
+        :: IsAIG l g
+        => g s
+        -> BV (l s)  -- ^ input bitvector
+        -> IO (BV (l s))
+countLeadingZeros g bv = do
+   lg <- logBase2_down g bv
+   let w'= bvFromInteger g (length bv) (fromIntegral (length bv - 1))
+   sub g w' lg
+
+-- | Count the number of trailing zeros in the input vector; that is,
+--   the number of less-significant digits set to 0 below the least
+--   significant digit which is set.  If the input vector is 0, the
+--   output of this function is the length of the bitvector (i.e.,
+--   all digits are counted as trailing zeros).
+--   The output bitvector has the same width as the input bitvector.
+countTrailingZeros
+        :: IsAIG l g
+        => g s
+        -> BV (l s)  -- ^ input bitvector
+        -> IO (BV (l s))
+countTrailingZeros g (BV v) = do
+   countLeadingZeros g (BV (V.reverse v))
+
+-- | Given positive x, find the unique i such that: 2^i <= x < 2^(i+1)
+--   This is the floor of the lg2 function.  We extend the function so
+--   intLog2_down 0 = -1.
+intLog2_down :: Int -> Int
+#if MIN_VERSION_base(4,8,0)
+intLog2_down x = (Bits.finiteBitSize x - 1) - Bits.countLeadingZeros x
+#else
+intLog2_down x
+   | x <= 0    = -1
+intLog2_down 1 =  0
+intLog2_down x =  1 + intLog2_down (x `div` 2)
+#endif
+
+-- | Given positive x, find the unique i such that: 2^(i-1) < x <= 2^i
+--   This is the ceiling of the lg2 function.
+--   Note: intLog2_up 1 = 0
+intLog2_up :: Int -> Int
+intLog2_up x = intLog2_down (x - 1) + 1
+
+-- | Priority encoder.  Given a bitvector, calculate the
+--   bit position of the most-significant 1 bit, with position
+--   0 corresponding to the least-significant-bit.  Return
+--   the "valid" bit, which is set iff at least one bit
+--   in the input is set; and the calcuated bit position.
+--   If no bits are set in the input (i.e. if the valid bit is false),
+--   the calculated bit position is zero.
+--   The indicated bitwidth must be large enough to hold the answer;
+--   in particular, we must have (length bv <= 2^w).
+priorityEncode :: IsAIG l g
+               => g s
+               -> Int       -- ^ width of the output bitvector
+               -> BV (l s)  -- ^ input bitvector
+               -> IO (l s, BV (l s)) -- ^ Valid bit and position bitvector
+priorityEncode g w bv
+  | w < 0 = fail $ unwords ["priorityEncode: asked for negative number of output bits", show w, show $ length bv]
+  | length bv == 0 = return ( falseLit g, replicate w (falseLit g) )
+  | length bv == 1 = return ( bv!0, replicate w (falseLit g) )
+  | otherwise = do
+       let w' = intLog2_up (length bv)
+
+       unless ( w' <= w )
+              (fail $ unwords ["priorityEncode: insufficent bits to encode priority output", show w, show $ length bv])
+
+       (v, p) <- doPriorityEncode g w' bv
+
+       unless (length p == w')
+              (fail $ unwords ["priorityEncode: length check failed", show $ length p, show w'])
+
+       -- zero extend as necessary to fit the requested bitwidth
+       let p' = replicate (w - length p) (falseLit g)
+       return (v, p'++p)
+
+-- Invariants:
+--     w > 0 and 2^(w-1) < length bv <= 2^w
+--      OR
+--     w = 0 and length bv = 1
+--
+--     length <output bv> = w
+doPriorityEncode
+    :: IsAIG l g
+    => g s
+    -> Int       -- ^ width of the output bitvector
+    -> BV (l s)  -- ^ input bitvector
+    -> IO (l s, BV (l s))
+doPriorityEncode g w bv
+   | w < 0 = fail "doPriorityEncode: negative w!"
+
+   | length bv == 1 = do                      -- w = 0
+        return ( bv!0, empty )
+
+   | length bv == 2 = do                      -- w = 1
+        v <- lOr' g (bv!0) (bv!1)
+        return (v, singleton (bv!1))
+
+   | length bv == 3 = do                      -- w = 2
+        vlo <- lOr' g (bv!0) (bv!1)
+        let vhi = bv!2
+        v  <- lOr' g vlo vhi
+        e0 <- lAnd' g (not vhi) (bv!1)
+        return (v, BV $ V.fromList [vhi, e0])
+
+   | length bv == 4 = do                      -- w = 2
+        vlo <- lOr' g (bv!0) (bv!1)
+        vhi <- lOr' g (bv!2) (bv!3)
+        v   <- lOr' g vlo vhi
+        e0  <- lazyMux g vhi (return (bv!3)) (return (bv!1))
+        return (v, BV $ V.fromList [vhi, e0])
+
+   | otherwise = do                           -- w >= 3; 2^(w-1) < length b <= 2^w
+       unless (w >= 3)
+              (fail "doPriorityEncode: w too small!")
+       unless (2^(w-1) < length bv && length bv <= 2^w)
+              (fail $ unwords ["doPriorityEncode: invariant check failed"
+                              , show w, show $ length bv ])
+
+       let bitsLo = 2^(w - 1)
+       let wLo = w - 1
+
+       let bitsHi = length bv - bitsLo
+       let wHi = intLog2_up bitsHi
+
+       unless (0 < bitsHi)
+              (fail "doPriorityEnode: bitsHi nonpositive")
+       unless (bitsHi <= bitsLo && wHi <= wLo)
+              (fail $ unwords ["doPriorityEncode: bounds check failed",
+                               show bitsHi, show bitsLo, show wHi, show wLo, show w, show $ length bv])
+
+       let bvLo = drop bitsHi bv
+       let bvHi = take bitsHi bv
+
+       (vHi, pHi) <- doPriorityEncode g wHi bvHi
+       (vLo, pLo) <- doPriorityEncode g wLo bvLo
+
+       v <- lOr' g vHi vLo
+       p <- iteM g vHi
+                   (return (replicate (length pLo - length pHi) (falseLit g) ++ pHi))
+                   (return pLo)
+       return (v, singleton vHi ++ p)
+
+
 -- | Polynomial multiplication. Note that the algorithm works the same
 --   no matter which endianness convention is used.  Result length is
 --   @max 0 (m+n-1)@, where @m@ and @n@ are the lengths of the inputs.
@@ -895,6 +1096,8 @@ pmul g x y = generateM_msb0 (max 0 (m + n - 1)) coeff
 
 -- | Polynomial mod with symbolic modulus. Return value has length one
 -- less than the length of the modulus.
+-- This implementation is optimized for the (common) case where the modulus
+-- is concrete.
 pmod :: forall l g s. IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
 pmod g x y = findmsb (bvToList y)
   where
@@ -932,3 +1135,62 @@ pmod g x y = findmsb (bvToList y)
               acc' <- Control.Monad.zipWithM (xor g) px acc
               p' <- next p
               go (i+1) p' acc'
+
+
+-- | Polynomial division. Return value has length
+--   equal to the first argument.
+pdiv :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
+pdiv g x y = do
+  (q,_) <- pdivmod g x y
+  return q
+
+-- Polynomial div/mod: resulting lengths are as in Cryptol.
+
+-- TODO: probably this function should be disentangled to only compute
+-- division, given that we have a separate polynomial modulus algorithm.
+pdivmod :: forall l g s. IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s), BV (l s))
+pdivmod g x y = findmsb (bvToList y)
+  where
+    findmsb :: [l s] -> IO (BV (l s), BV (l s))
+    findmsb (c : cs) = lmuxPair c (usemask cs) (findmsb cs)
+    findmsb [] = return (x, replicate (length y - 1) (falseLit g)) -- division by zero
+
+    usemask :: [l s] -> IO (BV (l s), BV (l s))
+    usemask mask = do
+      (qs, rs) <- pdivmod_helper g (bvToList x) mask
+      let z = falseLit g
+      let qs' = Prelude.map (const z) rs Prelude.++ qs
+      let rs' = Prelude.replicate (length y - 1 - Prelude.length rs) z Prelude.++ rs
+      let q = BV $ V.fromList qs'
+      let r = BV $ V.fromList rs'
+      return (q, r)
+
+    lmuxPair :: l s -> IO (BV (l s), BV (l s)) -> IO (BV (l s), BV (l s)) -> IO (BV (l s), BV (l s))
+    lmuxPair c a b
+      | c === trueLit g  = a
+      | c === falseLit g = b
+      | otherwise = join (muxPair c <$> a <*> b)
+
+    muxPair :: l s -> (BV (l s), BV (l s)) -> (BV (l s), BV (l s)) -> IO (BV (l s), BV (l s))
+    muxPair c (x1, y1) (x2, y2) = (,) <$> zipWithM (mux g c) x1 x2 <*> zipWithM (mux g c) y1 y2
+
+-- Divide ds by (1 : mask), giving quotient and remainder. All
+-- arguments and results are big-endian. Remainder has the same length
+-- as mask (but limited by length ds); total length of quotient ++
+-- remainder = length ds.
+pdivmod_helper :: forall l g s. IsAIG l g => g s -> [l s] -> [l s] -> IO ([l s], [l s])
+pdivmod_helper g ds mask = go (Prelude.length ds - Prelude.length mask) ds
+  where
+    go :: Int -> [l s] -> IO ([l s], [l s])
+    go n cs | n <= 0 = return ([], cs)
+    go _ []          = fail "Data.AIG.Operations.pdiv: impossible"
+    go n (c : cs)    = do cs' <- mux_add c cs mask
+                          (qs, rs) <- go (n - 1) cs'
+                          return (c : qs, rs)
+
+    mux_add :: l s -> [l s] -> [l s] -> IO [l s]
+    mux_add c (x : xs) (y : ys) = do z <- lazyMux g c (xor g x y) (return x)
+                                     zs <- mux_add c xs ys
+                                     return (z : zs)
+    mux_add _ []       (_ : _ ) = fail "Data.AIG.Operations.pdiv: impossible"
+    mux_add _ xs       []       = return xs
