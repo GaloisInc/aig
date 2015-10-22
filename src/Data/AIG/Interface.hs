@@ -55,7 +55,7 @@ module Data.AIG.Interface
 import Control.Applicative
 import Control.Monad
 import Prelude()
-import Prelude.Compat hiding (not, and, or)
+import Prelude.Compat hiding (not, and, or, mapM)
 import Test.QuickCheck (Gen, Arbitrary(..), generate, oneof, sized, choose)
 
 -- | Concrete datatype representing the ways
