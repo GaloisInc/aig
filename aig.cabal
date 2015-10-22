@@ -39,7 +39,8 @@ library
   ghc-options:      -Wall -fno-ignore-asserts -O2
   ghc-prof-options: -prof -auto-all -caf-all
   build-depends:
-    base == 4.*,
+    base >= 4,
+    base-compat >= 0.6.0,
     mtl,
     vector,
     QuickCheck >= 2.7
