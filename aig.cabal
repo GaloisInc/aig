@@ -1,5 +1,5 @@
 Name:               aig
-Version:            0.2.3
+Version:            0.2.4
 License:            BSD3
 License-file:       LICENSE
 Author:             Galois Inc.
@@ -34,7 +34,8 @@ library
   default-Language: Haskell2010
   ghc-options:      -Wall -fno-ignore-asserts -O2
   build-depends:
-    base == 4.*,
+    base >= 4,
+    base-compat >= 0.6.0,
     mtl,
     vector,
     QuickCheck >= 2.7

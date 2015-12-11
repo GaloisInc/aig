@@ -8,7 +8,6 @@ Portability : portable
 
 Interfaces for building, simulating and analysing And-Inverter Graphs (AIG).
 -}
-{-# LANGUAGE CPP #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE Rank2Types #-}
@@ -55,13 +54,9 @@ module Data.AIG.Interface
 
 import Control.Applicative
 import Control.Monad
-import Prelude hiding (not, and, or)
+import Prelude()
+import Prelude.Compat hiding (not, and, or, mapM)
 import Test.QuickCheck (Gen, Arbitrary(..), generate, oneof, sized, choose)
-
-#if !MIN_VERSION_base(4,8,0)
-import Data.Foldable (Foldable)
-import Data.Traversable (Traversable)
-#endif
 
 -- | Concrete datatype representing the ways
 --   an AIG can be constructed.
