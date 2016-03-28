@@ -877,9 +877,12 @@ rol :: IsAIG l g
     -> BV (l s)    -- ^ the value to rotate
     -> BV (l s)    -- ^ how many places to rotate
     -> IO (BV (l s))
-rol g x y = do
-  r <- urem g y (bvFromInteger g (length y) (toInteger (length x)))
-  muxInteger (iteM g) (length x - 1) r (return . rolC x)
+rol g x0 (BV ys) = fst <$> V.foldM f (x0, 1) (V.reverse ys)
+  where
+    f (x, p) y = do
+      x' <- ite g y (rolC x p) x
+      let p' = (2*p) `mod` length x0
+      return (x', p')
 
 -- | Rotate right.
 ror :: IsAIG l g
@@ -887,9 +890,12 @@ ror :: IsAIG l g
     -> BV (l s)    -- ^ the value to rotate
     -> BV (l s)    -- ^ how many places to rotate
     -> IO (BV (l s))
-ror g x y = do
-  r <- urem g y (bvFromInteger g (length y) (toInteger (length x)))
-  muxInteger (iteM g) (length x - 1) r (return . rorC x)
+ror g x0 (BV ys) = fst <$> V.foldM f (x0, 1) (V.reverse ys)
+  where
+    f (x, p) y = do
+      x' <- ite g y (rolC x p) x
+      let p' = (2*p) `mod` length x0
+      return (x', p')
 
 
 -- | Compute the rounded-down base2 logarithm of the input bitvector.
