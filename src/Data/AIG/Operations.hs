@@ -893,7 +893,7 @@ ror :: IsAIG l g
 ror g x0 (BV ys) = fst <$> V.foldM f (x0, 1) (V.reverse ys)
   where
     f (x, p) y = do
-      x' <- ite g y (rolC x p) x
+      x' <- ite g y (rorC x p) x
       let p' = (2*p) `mod` length x0
       return (x', p')
 
