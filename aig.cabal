@@ -1,10 +1,10 @@
 Name:               aig
-Version:            0.2.4
+Version:            0.2.5
 License:            BSD3
 License-file:       LICENSE
 Author:             Galois Inc.
 Maintainer:         jhendrix@galois.com
-Copyright:          (c) 2014-2015 Galois Inc.
+Copyright:          (c) 2014-2017 Galois Inc.
 Category:           Data
 build-type:         Simple
 cabal-Version:      >= 1.10
@@ -39,9 +39,6 @@ library
     mtl,
     vector,
     QuickCheck >= 2.7
-
-  if flag(enable-hpc)
-    ghc-options: -fhpc -hpcdir .hpc
 
 test-suite aig-test
   type: exitcode-stdio-1.0
