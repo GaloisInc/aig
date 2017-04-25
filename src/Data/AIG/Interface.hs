@@ -1,6 +1,6 @@
 {- |
 Module      : Data.AIG.Interface
-Copyright   : (c) Galois, Inc. 2014
+Copyright   : (c) Galois, Inc. 2014-2017
 License     : BSD3
 Maintainer  : jhendrix@galois.com
 Stability   : experimental
@@ -28,6 +28,7 @@ module Data.AIG.Interface
   , networkOutputCount
   -- * Literal representations
   , LitView(..)
+  , negateLitView
   , LitTree(..)
   , toLitTree
   , fromLitTree
@@ -50,11 +51,16 @@ module Data.AIG.Interface
   , getMaxInput
   , buildNetwork
   , randomNetwork
+  , BasicGraph
+  , BasicLit
+  , basicProxy
+  , newBasicGraph
   ) where
 
+import qualified Prelude as Prelude
 import Control.Applicative
 import Control.Monad
-import Prelude()
+import Data.IORef
 import Prelude.Compat hiding (not, and, or, mapM)
 import Test.QuickCheck (Gen, Arbitrary(..), generate, oneof, sized, choose)
 
@@ -68,6 +74,16 @@ data LitView a
   | TrueLit
   | FalseLit
  deriving (Eq,Show,Ord,Functor,Foldable,Traversable)
+
+negateLitView :: LitView a -> LitView a
+negateLitView l = case l of
+     TrueLit    -> FalseLit
+     FalseLit   -> TrueLit
+     Input i    -> NotInput i
+     NotInput i -> Input i
+     And x y    -> NotAnd x y
+     NotAnd x y -> And x y
+
 
 newtype LitTree = LitTree { unLitTree :: LitView LitTree }
  deriving (Eq,Show,Ord)
@@ -391,3 +407,105 @@ buildNetwork proxy litForrest = do
 --   and using that to construct a network.
 randomNetwork :: IsAIG l g => Proxy l g -> IO (Network l g)
 randomNetwork proxy = generate arbitrary >>= buildNetwork proxy
+
+------------------------------------------------------------------
+-- | A basic "Graph" datastructure based on LitTrees.  This is a totally
+--   naive implementation of the AIG structure that exists
+--   exclusively for testing purposes.
+newtype BasicGraph s = BasicGraph (IORef Int)
+
+------------------------------------------------------------------
+-- | A basic AIG literal datastructure based on LitTrees.
+--   This is a totally
+--   naive implementation of the AIG structure that exists
+--   exclusively for testing purposes.
+newtype BasicLit s = BasicLit LitTree
+ deriving (Show)
+
+basicProxy :: Proxy BasicLit BasicGraph
+basicProxy = Proxy (\x -> x)
+
+notTree :: LitTree -> LitTree
+notTree (LitTree x) = LitTree . negateLitView $ x
+
+andTree :: LitTree -> LitTree -> LitTree
+andTree (LitTree FalseLit) _    = LitTree FalseLit
+andTree _ (LitTree FalseLit)    = LitTree FalseLit
+andTree (LitTree TrueLit) y     = y
+andTree x (LitTree TrueLit)     = x
+andTree x y                     = LitTree (And x y)
+
+newBasicGraph :: IO (BasicGraph s)
+newBasicGraph =
+  do r <- newIORef 0
+     return (BasicGraph r)
+
+instance IsLit BasicLit where
+  not (BasicLit x) = BasicLit . notTree $ x
+  (BasicLit x) === (BasicLit y) = x == y
+
+instance IsAIG BasicLit BasicGraph where
+  withNewGraph _proxy k = k =<< newBasicGraph
+
+  aigerNetwork _proxy _fp =
+    fail "Cannot read AIGER files from the BasicGraph implementation"
+
+  trueLit  _g = BasicLit . LitTree $ TrueLit
+  falseLit _g = BasicLit . LitTree $ FalseLit
+
+  newInput (BasicGraph r) =
+     atomicModifyIORef' r (\n -> (n+1, BasicLit . LitTree . Input $ n))
+
+  and _g (BasicLit x) (BasicLit  y) = return . BasicLit $ andTree x y
+
+  inputCount (BasicGraph r) = readIORef r
+
+  -- | Get input at given index in the graph.
+  getInput _g i = return . BasicLit . LitTree . Input $ i
+
+  writeAiger _fp _ntk =
+     fail "Cannot write AIGER files from the BasicGraph implementation"
+
+  writeCNF _g _l _fp =
+     fail "Cannot write CNF files from the BasicGraph implementation"
+
+  checkSat _g _l =
+     fail "Cannot SAT check graphs in the BasicGraph implementation"
+
+  cec _g1 _g2 =
+     fail "Cannot CEC graphs in the BasicGraph implementation"
+
+  asConstant _g (BasicLit bl) = go bl
+    where
+     go (LitTree l) = go' l
+
+     go' l = case l of
+         TrueLit    -> pure True
+         FalseLit   -> pure False
+         And x y    -> (&&) <$> go x <*> go y
+         NotAnd x y -> Prelude.not <$> go' (And x y)
+         Input _    -> Nothing
+         NotInput _ -> Nothing
+
+  -- | Evaluate the network on a set of concrete inputs.
+  evaluator _g xs = return (\(BasicLit x) -> eval x)
+    where
+     eval :: LitTree -> Bool
+     eval (LitTree x) = eval' x
+
+     eval' :: LitView LitTree -> Bool
+     eval' TrueLit      = True
+     eval' FalseLit     = False
+     eval' (And x y)    = eval x && eval y
+     eval' (NotAnd x y) = Prelude.not (eval' (And x y))
+     eval' (Input i)    = case drop i xs of
+                            (b:_) -> b
+                            []    -> error $ unwords ["Input value out of bounds", show i]
+     eval' (NotInput i) = Prelude.not (eval' (Input i))
+
+  -- | Examine the outermost structure of a literal to see how it was constructed
+  litView _ (BasicLit (LitTree x)) = return (fmap BasicLit x)
+
+  -- | Build an evaluation function over an AIG using the provided view function
+  abstractEvaluateAIG _g f = return (\(BasicLit x) -> h x)
+   where h (LitTree x) = f =<< traverse h x
