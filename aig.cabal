@@ -1,10 +1,10 @@
 Name:               aig
-Version:            0.2.4-dev
+Version:            0.2.5-dev
 License:            BSD3
 License-file:       LICENSE
 Author:             Galois Inc.
 Maintainer:         jhendrix@galois.com
-Copyright:          (c) 2014-2015 Galois Inc.
+Copyright:          (c) 2014-2017 Galois Inc.
 Category:           Data
 build-type:         Simple
 cabal-Version:      >= 1.10
