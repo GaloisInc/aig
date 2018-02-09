@@ -480,8 +480,13 @@ halfAdder g b c = do
 {-# INLINE fullAdder #-}
 fullAdder :: IsAIG l g => g s -> l s -> l s -> l s -> IO (l s, l s)
 fullAdder g a b c_in = do
-   s <- lXor' g c_in =<< lXor' g a b
-   c_out <- lOr g (lAnd' g a b) (lAnd'' g c_in (lXor' g a b))
+   ab      <- lAnd' g a b
+   a'b'    <- lAnd' g (not a) (not b)
+   xab     <- lAnd' g (not ab) (not a'b')
+   xab_c   <- lAnd' g xab c_in
+   xab'_c' <- lAnd' g (not xab) (not c_in)
+   s       <- lAnd' g (not xab_c) (not xab'_c')
+   c_out   <- lOr' g ab xab_c
    return (s, c_out)
 
 -- | Implements a ripple carry adder.  Both addends are assumed to have
