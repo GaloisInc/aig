@@ -31,6 +31,7 @@ library
   hs-source-dirs:   src
   exposed-modules:
     Data.AIG
+    Data.AIG.AddTree
     Data.AIG.Interface
     Data.AIG.Operations
     Data.AIG.Trace
@@ -41,6 +42,7 @@ library
   build-depends:
     base >= 4,
     base-compat >= 0.6.0,
+    containers >= 0.5.5,
     mtl,
     vector,
     QuickCheck >= 2.7
