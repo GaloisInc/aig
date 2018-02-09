@@ -80,6 +80,7 @@ module Data.AIG.Operations
     -- ** Multiplication and division
   , mul
   , mulFull
+  , wallaceMultiply
   , smulFull
   , squot
   , srem
@@ -142,6 +143,7 @@ import Prelude.Compat
 import qualified Prelude.Compat as Prelude
 
 import Data.AIG.Interface
+import Data.AIG.AddTree
 
 -- | A BitVector consists of a sequence of symbolic bits and can be used
 --   for symbolic machine-word arithmetic.  Bits are stored in
@@ -623,12 +625,36 @@ mul g x y = assert (length x == length y) $ do
 
 -- | Unsigned multiply two bitvectors with size @m@ and size @n@,
 --   resulting in a vector of size @m+n@.
+--mulFull :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
+--mulFull g x y =
+--    let len = length x + length y
+--        x' = zext g x len
+--        y' = zext g y len
+--     in mul g x' y'
+
 mulFull :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
-mulFull g x y =
+mulFull = wallaceMultiply
+
+
+wallaceMultiply :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
+wallaceMultiply g x y =
+ do let lenx = length x
+    let leny = length y
     let len = length x + length y
-        x' = zext g x len
-        y' = zext g y len
-     in mul g x' y'
+    t <- newAddTree len
+    forM_ [0..lenx-1] $ \i ->
+      forM_ [0..leny-1] $ \j ->
+        do z <- lAnd' g (x!i) (y!j)
+           pushBit (i+j) (0,z) t
+    let fa d b0 b1 b2 =
+         do (s,c) <- fullAdder g b0 b1 b2
+            return (d+4, c, s)
+    let ha d b0 b1 =
+         do (s,c) <- halfAdder g b0 b1
+            return (d+3, c, s)
+
+    BV <$> wallaceTreeReduction (falseLit g) fa ha t
+
 
 -- | Signed multiply two bitvectors with size @m@ and size @n@,
 --   resulting in a vector of size @m+n@.
