@@ -33,6 +33,7 @@ module Data.AIG.Operations
   , lsb
   , bvSame
   , bvShow
+  , bvCircuitDepth
 
     -- ** Building bitvectors
   , generateM_msb0
@@ -45,6 +46,7 @@ module Data.AIG.Operations
   , bvFromList
   , muxInteger
   , singleton
+  , newBV
 
     -- ** Lazy operators
   , lAnd
@@ -81,6 +83,7 @@ module Data.AIG.Operations
   , mul
   , mulFull
   , wallaceMultiply
+  , daddaMultiply
   , smulFull
   , squot
   , srem
@@ -242,6 +245,9 @@ replicateM
    -> m (BV l)
 replicateM c e = return . BV =<< V.replicateM c e
 
+newBV :: IsAIG l g => g s -> Int -> IO (BV (l s))
+newBV g n = replicateM n (newInput g)
+
 -- | Generate a one-element bitvector containing the given literal
 singleton :: l -> BV l
 singleton = BV . V.singleton
@@ -310,6 +316,12 @@ bvFromList xs = BV (V.fromList xs)
 --   It is an error to request an out-of-bounds bit.
 (!) :: BV l -> Int -> l
 (!) v i = v `at` (length v - 1 - i)
+
+-- | Compute the maximum circuit depth of the bitvector.
+bvCircuitDepth :: IsAIG l g => g s -> BV (l s) -> IO Int
+bvCircuitDepth g (BV bv) =
+  do cnt <- depthCounter g
+     foldM (\n x -> max n <$> cnt x) 0 bv
 
 -- | Display a bitvector as a string of bits with most significant bits first.
 --   Concrete literals are displayed as '0' or '1', whereas symbolic literals are displayed as 'x'.
@@ -625,19 +637,50 @@ mul g x y = assert (length x == length y) $ do
 
 -- | Unsigned multiply two bitvectors with size @m@ and size @n@,
 --   resulting in a vector of size @m+n@.
---mulFull :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
---mulFull g x y =
---    let len = length x + length y
---        x' = zext g x len
---        y' = zext g y len
---     in mul g x' y'
-
 mulFull :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
-mulFull = wallaceMultiply
+mulFull g x y =
+   let len = length x + length y
+       x' = zext g x len
+       y' = zext g y len
+    in mul g x' y'
 
-
+-- | Unsigned multiply two bitvectors with size @m@ and size @n@,
+--   resulting in a vector of size @m+n@.  This algorithm uses
+--   Wallace tree reduction.  This reduces the depth of the circuit
+--   and the number of gates relative to the standard multiplication
+--   algorithm.  However, it appears to perform less well for most
+--   verification tasks.
 wallaceMultiply :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
 wallaceMultiply g x y =
+  do t <- multTree g x y
+     let fa d b0 b1 b2 =
+          do (s,c) <- fullAdder g b0 b1 b2
+             return (d+4, c, s)
+     let ha d b0 b1 =
+          do (s,c) <- halfAdder g b0 b1
+             return (d+3, c, s)
+     BV <$> wallaceTreeReduction (falseLit g) fa ha t
+
+-- | Unsigned multiply two bitvectors with size @m@ and size @n@,
+--   resulting in a vector of size @m+n@.  This algorithm uses
+--   Dadda tree reduction.  This reduces the depth of the circuit
+--   and the number of gates relative to the standard multiplication
+--   algorithm, and is a minor improvement on both metrics over Wallace
+--   tree multiplication.  As with Wallace multiplication, this algorithm
+--   performs less well than the standard multplication for verification tasks.
+daddaMultiply :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
+daddaMultiply g x y =
+  do t <- multTree g x y
+     let fa d b0 b1 b2 =
+          do (s,c) <- fullAdder g b0 b1 b2
+             return (d+4, c, s)
+     let ha d b0 b1 =
+          do (s,c) <- halfAdder g b0 b1
+             return (d+3, c, s)
+     BV <$> daddaTreeReduction (falseLit g) fa ha t
+
+multTree :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (AddTree (l s))
+multTree g x y =
  do let lenx = length x
     let leny = length y
     let len = length x + length y
@@ -645,16 +688,8 @@ wallaceMultiply g x y =
     forM_ [0..lenx-1] $ \i ->
       forM_ [0..leny-1] $ \j ->
         do z <- lAnd' g (x!i) (y!j)
-           pushBit (i+j) (0,z) t
-    let fa d b0 b1 b2 =
-         do (s,c) <- fullAdder g b0 b1 b2
-            return (d+4, c, s)
-    let ha d b0 b1 =
-         do (s,c) <- halfAdder g b0 b1
-            return (d+3, c, s)
-
-    BV <$> wallaceTreeReduction (falseLit g) fa ha t
-
+           pushBit (i+j) (0, z) t
+    return t
 
 -- | Signed multiply two bitvectors with size @m@ and size @n@,
 --   resulting in a vector of size @m+n@.

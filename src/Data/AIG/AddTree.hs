@@ -20,11 +20,13 @@ reduction for popcount circuits.
 module Data.AIG.AddTree
   ( AddTree
   , newAddTree
-  , columnHeight
   , pushBit
   , wallaceTreeReduction
+  , daddaTreeReduction
   ) where
 
+import           Control.Monad
+import           Data.Bits
 import           Data.Monoid
 
 import qualified Data.Vector as V
@@ -33,21 +35,40 @@ import qualified Data.IntMap.Strict as IMap
 import qualified Data.Sequence as Seq
 
 type Column b = IMap.IntMap (Seq.Seq b)
+
 newtype AddTree b = AddTree { addTree :: MV.IOVector (Column b) }
 
+-- | Create a new addition reduction tree with the given number of columns.
 newAddTree ::
-  Int ->
+  Int {- ^ Maximum number of columns in the reduction tree -} ->
   IO (AddTree b)
 newAddTree n = AddTree <$> MV.replicate n IMap.empty
 
+
+-- | Push a new bit into the addition tree.  If the bit's position
+--   doesn't fit, it is silently discarded!  The column numbers
+--   correspond to the positional value of the resulting number;
+--   i.e., column 0 is the least significant bit.
+--
+--   Bits are later pulled out of each column prefering bits with
+--   the lowest value for the delay heuristic first.
 pushBit ::
   Int     {- ^ Output column -} ->
   (Int,b) {- ^ Delay heuristic, bit pair -} ->
   AddTree b ->
   IO ()
-pushBit x (d,b) (AddTree mv) = MV.modify mv (IMap.alter f d) x
+pushBit x db (AddTree mv) | 0 <= x && x < MV.length mv = MV.modify mv (pushColumn db) x
+pushBit _ _ _ = return () -- out-of-bounds bits are just silently thrown away!
+
+
+pushColumn ::
+  (Int,b) ->
+  Column b ->
+  Column b
+pushColumn (d,b) = IMap.alter f d
   where f Nothing  = Just (Seq.singleton b)
         f (Just s) = Just (s Seq.|> b)
+
 
 popColumn ::
   Column b ->
@@ -103,48 +124,124 @@ popColumn3 col =
             in (d', b0, b1, b2, col'')
      Seq.EmptyL -> popColumn3 col'
 
-{-
-popBit ::
-  Int   {- ^ Column number -} ->
-  AddTree b ->
-  IO b
-popBit x (AddTree mv) =
-  do col <- MV.read mv x
-     let (_d,b,col') = popColumn col
-     MV.write mv x col'
-     return b
-
-popBit2 ::
-  Int   {- ^ Column number -} ->
-  AddTree b ->
-  IO (b, b)
-popBit2 x (AddTree mv) =
-  do col <- MV.read mv x
-     let (_d,b0,b1,col') = popColumn2 col
-     MV.write mv x col'
-     return (b0,b1)
-
-popBit3 ::
-  Int   {- ^ Column number -} ->
-  AddTree b ->
-  IO (b, b, b)
-popBit3 x (AddTree mv) =
-  do col <- MV.read mv x
-     let (_d,b0,b1,b2,col') = popColumn3 col
-     MV.write mv x col'
-     return (b0,b1,b2)
--}
 
 colHeight :: Column b -> Int
 colHeight = getSum . foldMap (Sum . Seq.length)
 
-columnHeight ::
-  Int    {- ^ Column -} ->
-  AddTree b ->
-  IO Int
-columnHeight x (AddTree mv) =
-  getSum . foldMap (Sum . Seq.length) <$> MV.read mv x
+maxColumnHeight :: AddTree b -> IO Int
+maxColumnHeight (AddTree mv) =
+  maximum <$> (forM [0 .. MV.length mv-1] (\i -> colHeight <$> MV.read mv i))
 
+
+-- | Having reduced the tree to a maximum column height of 2, compute the final
+--   sum using a standard ripple-carry adder.
+finishReduction :: forall b.
+  b ->
+  (Int -> b -> b -> b -> IO (Int,b,b)) {- ^ full adder, returns (delay,carry,sum) -} ->
+  (Int -> b -> b -> IO (Int,b,b))      {- ^ half adder, returns (delay,carry,sum) -} ->
+  AddTree b                            {- ^ addition tree to reduce -} ->
+  IO (V.Vector b)
+finishReduction z fa ha ys = V.generateM (MV.length (addTree ys)) $ \i ->
+   do col <- MV.read (addTree ys) i
+      if | colHeight col == 0 ->
+            do return z
+
+         | colHeight col == 1 ->
+            do let (_,b0,_) = popColumn col
+               return b0
+
+         | colHeight col == 2 ->
+            do let (d,b0,b1,_) = popColumn2 col
+               (d',c,s) <- ha d b0 b1
+               pushBit (i+1) (d',c) ys
+               return s
+
+         | colHeight col == 3 ->
+            do let (d,b0,b1,b2,_) = popColumn3 col
+               (d',c,s) <- fa d b0 b1 b2
+               pushBit (i+1) (d',c) ys
+               return s
+
+         | otherwise ->
+            fail ("finishReduction: too many remaining bits! " ++ show (colHeight col))
+
+-- | Sequence of maximum column heights for Dadda tree reduction.
+--
+--     j(0)   = 2
+--
+--     j(n+1) = floor( 1.5 * j(n) )
+daddaSequence :: [Int]
+daddaSequence = 2 : [ x + (x `shiftR` 1)  | x <- daddaSequence ]
+
+-- | Find the initial segment of the Dadda sequence that is
+--   less than the given value, and return it, in reversed order.
+--
+--   These values determine how much reduction is done in each round
+--   of Dadda tree reduction.
+daddaReductionSequence :: Int -> [Int]
+daddaReductionSequence n = go daddaSequence []
+ where
+ go (x:xs) output
+   | x >= n    = output
+   | otherwise = go xs (x:output)
+ go _ _ = error "daddaSequenceReduction: impossible!"
+
+
+-- | Given a collection of bits in a reduction tree, compute the
+--   final sum using the Dadda reduction tree strategy.  This strategy
+--   reduces as few bits as possible in each round (while still maintaining
+--   optimal number of reduction rounds for a given bit width) and
+--   is willing to spills carry bits one column over in a single round.
+daddaTreeReduction :: forall b.
+  b ->
+  (Int -> b -> b -> b -> IO (Int,b,b)) {- ^ full adder, returns (delay,carry,sum) -} ->
+  (Int -> b -> b -> IO (Int,b,b))      {- ^ half adder, returns (delay,carry,sum) -} ->
+  AddTree b                 {- ^ addition tree to reduce -} ->
+  IO (V.Vector b)
+daddaTreeReduction z fa ha input =
+  do hs <- daddaReductionSequence <$> maxColumnHeight input
+     V.reverse <$> go input hs
+
+ where
+ n = MV.length (addTree input)
+
+ go xs [] =
+    do mh <- maxColumnHeight xs
+       unless (mh <= 2) (fail $ "dadda reduction failed with too many remaining bits " ++ show mh)
+       finishReduction z fa ha xs
+
+ go xs (h:hs) =
+    do forM_ [0..n-1] $ \i ->
+         do col <- MV.read (addTree xs) i
+            reduceCol h xs i col
+       mh <- maxColumnHeight xs
+       unless (mh <= h) (fail $ unwords ["dadda reduction failed with too many remaining bits", show mh, show (h:hs)])
+       go xs hs
+
+ reduceCol h ys i col
+   | colh <= h = MV.write (addTree ys) i col
+
+   | colh == h+1 =
+       do let (d,b0,b1,col') = popColumn2 col
+          (d',c,s) <- ha d b0 b1
+          let col'' = pushColumn (d',s) col'
+          pushBit (i+1) (d',c) ys
+          MV.write (addTree ys) i col''
+
+   | otherwise =
+       do let (d,b0,b1,b2,col') = popColumn3 col
+          (d',c,s) <- fa d b0 b1 b2
+          let col'' = pushColumn (d',s) col'
+          pushBit (i+1) (d',c) ys
+          reduceCol h ys i col''
+
+  where colh = colHeight col
+
+
+-- | Given a collection of bits in a reduction tree, compute the
+--   final sum using the Wallace reduction tree strategy.  This strategy
+--   greedly reduces as many bits as possible in each round without spilling
+--   and carry bits until the next round.
 wallaceTreeReduction :: forall b.
   b ->
   (Int -> b -> b -> b -> IO (Int,b,b)) {- ^ full adder, returns (delay,carry,sum) -} ->
@@ -152,45 +249,38 @@ wallaceTreeReduction :: forall b.
   AddTree b                 {- ^ addition tree to reduce -} ->
   IO (V.Vector b)
 wallaceTreeReduction z fa ha input =
-  do tmp <- MV.replicate n mempty
-     final <- go input (AddTree tmp) 0 True
-     V.generateM n (getBit final)
+  do tmp <- AddTree <$> MV.replicate n mempty
+     V.reverse <$> go input tmp 0
 
  where
- getBit :: AddTree b -> Int -> IO b
- getBit final i =
-    do col <- MV.read (addTree final) (n-1-i)
-       let h = colHeight col
-       if | h == 0 -> return z
-          | h == 1 -> let (_,b,_) = popColumn col
-                       in return b
-          | otherwise -> fail $ "Final tree has hight " ++ show h ++ " in column " ++ show i
 
  n = MV.length (addTree input)
- go xs ys i done
-   | i+1 >= n, done = return ys
-   | i+1 >= n =
-       do tmp <- MV.replicate n mempty
-          go ys (AddTree tmp) 0 True
+
+ go xs ys i
+   | i >= n =
+       do mh <- maxColumnHeight ys
+          if mh > 2
+            then do tmp <- MV.replicate n mempty
+                    go ys (AddTree tmp) 0
+            else finishReduction z fa ha ys
+
    | otherwise    =
        do col <- MV.read (addTree xs) i
-          done' <- reduceCol ys i col done
-          go xs ys (i+1) done'
+          reduceCol ys i col
+          go xs ys (i+1)
 
- reduceCol ys i col done
-   | h == 0 = return done
+ reduceCol ys i col
+   | h == 0 = return ()
    | h == 1 = do let (d,b,_) = popColumn col
                  pushBit i (d, b) ys
-                 return done
    | h == 2 = do let (d,b0,b1,_) = popColumn2 col
                  (d',c,s) <- ha d b0 b1
                  pushBit i     (d',s) ys
                  pushBit (i+1) (d',c) ys
-                 return False
    | otherwise = do let (d,b0,b1,b2,col') = popColumn3 col
                     (d',c,s) <- fa d b0 b1 b2
                     pushBit i     (d',s) ys
                     pushBit (i+1) (d',c) ys
-                    reduceCol ys i col' False
+                    reduceCol ys i col'
 
    where h = colHeight col

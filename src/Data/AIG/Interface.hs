@@ -19,6 +19,8 @@ module Data.AIG.Interface
     IsLit(..)
   , IsAIG(..)
   , lazyMux
+  , circuitDepth
+  , depthCounter
 
     -- * Helper datatypes
   , Proxy(..)
@@ -299,6 +301,18 @@ lazyMux g c
   | c === (trueLit g)  = \x _y -> x
   | c === (falseLit g) = \_x y -> y
   | otherwise = \x y -> join $ pure (mux g c) <*> x <*> y
+
+depthCounter :: IsAIG l g => g s -> IO (l s -> IO Int)
+depthCounter g = abstractEvaluateAIG g f
+ where
+ f (And x y)    = return (1+max x y)
+ f (NotAnd x y) = return (1+max x y)
+ f _            = return 0
+
+circuitDepth :: IsAIG l g => g s -> l s -> IO Int
+circuitDepth g x =
+  do cnt <- depthCounter g
+     cnt x
 
 -- | A network is an and-invertor graph paired with it's outputs,
 -- thus representing a complete combinational circuit.
