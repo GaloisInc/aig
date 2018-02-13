@@ -12,6 +12,7 @@ that can be built from the primitive And-Inverter Graph interface.
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveFoldable #-}
 {-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE CPP #-}
 module Data.AIG.Operations
@@ -113,6 +114,10 @@ module Data.AIG.Operations
   , trunc
   , zeroIntCoerce
   , signIntCoerce
+
+    -- * Population count
+  , popCount
+  , popCount'
 
     -- * Priority encoder, lg2, and related functions
   , priorityEncode
@@ -962,6 +967,44 @@ ror g x0 (BV ys) = fst <$> V.foldM f (x0, 1) (V.reverse ys)
       x' <- ite g y (rorC x p) x
       let p' = (2*p) `mod` length x0
       return (x', p')
+
+-- | Count the number of set bits in the given bitvector.  The output
+--   bitvector will be of the same width as the input.  Uses an
+--   addition reduction tree to compute the popcount.
+popCount ::
+  IsAIG l g =>
+  g s ->
+  BV (l s) ->
+  IO (BV (l s))
+popCount g bv =
+  do let n = length bv
+     t <- newAddTree n
+     forM_ [0 .. n-1] $ \i ->
+       let b = bv!i in
+       if | b === falseLit g -> return ()
+          | b === trueLit g  -> pushBit 0 (0, b) t
+          | otherwise        -> pushBit 0 (1, b) t
+     let fa d b0 b1 b2 =
+          do (s,c) <- fullAdder g b0 b1 b2
+             return (d+4, c, s)
+     let ha d b0 b1 =
+          do (s,c) <- halfAdder g b0 b1
+             return (d+3, c, s)
+     BV <$> daddaTreeReduction (falseLit g) fa ha t
+
+-- | Count the number of set bits in the given bitvector.  The output
+--   bitvector will be of the same width as the input.  Uses a linear
+--   sequence of increments to compute the popcount.
+popCount' :: IsAIG l g => g s -> BV (l s) -> IO (BV (l s))
+popCount' g x = do
+  -- Create mutable array to store result.
+  let n = length x
+  -- Function to update bits.
+  let updateBits i z | i == n = return z
+      updateBits i z = do
+        z' <- iteM g (x ! i) (addConst g z 1) (return z)
+        updateBits (i+1) z'
+  updateBits 0 $ replicate (length x) (falseLit g)
 
 
 -- | Compute the rounded-down base2 logarithm of the input bitvector.
