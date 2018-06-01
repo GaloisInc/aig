@@ -196,6 +196,9 @@ class IsLit l => IsAIG l g | g -> l where
   -- | Write network out to AIGER file.
   writeAiger :: FilePath -> Network l g -> IO ()
 
+  -- | Write network out to AIGER file with some inputs designated as latches.
+  writeAigerWithLatches :: FilePath -> Network l g -> Int -> IO ()
+
   -- | Write network out to DIMACS CNF file.
   -- Returns vector mapping combinational inputs to CNF Variable
   -- numbers.
@@ -464,6 +467,9 @@ instance IsAIG BasicLit BasicGraph where
   getInput _g i = return . BasicLit . LitTree . Input $ i
 
   writeAiger _fp _ntk =
+     fail "Cannot write AIGER files from the BasicGraph implementation"
+
+  writeAigerWithLatches _fp _ntk _n =
      fail "Cannot write AIGER files from the BasicGraph implementation"
 
   writeCNF _g _l _fp =

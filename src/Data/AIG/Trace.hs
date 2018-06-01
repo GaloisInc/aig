@@ -170,6 +170,9 @@ instance (IsAIG l g, Traceable l) => IsAIG (TraceLit l) (TraceGraph l g) where
   writeAiger fp0 (Network g outs0) =
        (traceOp g "writeAiger" $ \fp outs -> writeAiger fp (Network (tGraph g) (map unTraceLit outs))) fp0 outs0
 
+  writeAigerWithLatches fp0 (Network g outs0) nl0 =
+       (traceOp g "writeAigerWithLatches" $ \fp outs nl -> writeAigerWithLatches fp (Network (tGraph g) (map unTraceLit outs)) nl) fp0 outs0 nl0
+
   writeCNF g =
        traceOp g "writeCNF" $ \out fp -> writeCNF (tGraph g) (unTraceLit out) fp
 
