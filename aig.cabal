@@ -1,5 +1,5 @@
 Name:               aig
-Version:            0.2.5-dev
+Version:            0.2.6
 License:            BSD3
 License-file:       LICENSE
 Author:             Galois Inc.
@@ -19,10 +19,6 @@ Description:
   These interfaces allow clients to write code that can create
   and use AIGs without depending on a particular AIG package.
 
-flag enable-hpc
-  Description: Collect HPC coverage information.
-  Default: False
-
 source-repository head
   type: git
   location: https://github.com/GaloisInc/aig.git
@@ -36,17 +32,13 @@ library
     Data.AIG.Trace
 
   default-Language: Haskell2010
-  ghc-options:      -Wall -fno-ignore-asserts -O2
-  ghc-prof-options: -prof -auto-all -caf-all
+  ghc-options:      -Wall -fno-ignore-asserts
   build-depends:
-    base >= 4,
+    base >= 4 && < 4.12,
     base-compat >= 0.6.0,
     mtl,
     vector,
     QuickCheck >= 2.7
-
-  if flag(enable-hpc)
-    ghc-options: -fhpc -hpcdir .hpc
 
 test-suite aig-test
   type: exitcode-stdio-1.0
