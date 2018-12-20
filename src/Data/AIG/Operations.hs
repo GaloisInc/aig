@@ -12,6 +12,7 @@ that can be built from the primitive And-Inverter Graph interface.
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveFoldable #-}
 {-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE CPP #-}
 module Data.AIG.Operations
@@ -33,6 +34,7 @@ module Data.AIG.Operations
   , lsb
   , bvSame
   , bvShow
+  , bvCircuitDepth
 
     -- ** Building bitvectors
   , generateM_msb0
@@ -45,6 +47,7 @@ module Data.AIG.Operations
   , bvFromList
   , muxInteger
   , singleton
+  , newBV
 
     -- ** Lazy operators
   , lAnd
@@ -80,6 +83,8 @@ module Data.AIG.Operations
     -- ** Multiplication and division
   , mul
   , mulFull
+  , wallaceMultiply
+  , daddaMultiply
   , smulFull
   , squot
   , srem
@@ -109,6 +114,10 @@ module Data.AIG.Operations
   , trunc
   , zeroIntCoerce
   , signIntCoerce
+
+    -- * Population count
+  , popCount
+  , popCount'
 
     -- * Priority encoder, lg2, and related functions
   , priorityEncode
@@ -142,6 +151,7 @@ import Prelude.Compat
 import qualified Prelude.Compat as Prelude
 
 import Data.AIG.Interface
+import Data.AIG.AddTree
 
 -- | A BitVector consists of a sequence of symbolic bits and can be used
 --   for symbolic machine-word arithmetic.  Bits are stored in
@@ -240,6 +250,9 @@ replicateM
    -> m (BV l)
 replicateM c e = return . BV =<< V.replicateM c e
 
+newBV :: IsAIG l g => g s -> Int -> IO (BV (l s))
+newBV g n = replicateM n (newInput g)
+
 -- | Generate a one-element bitvector containing the given literal
 singleton :: l -> BV l
 singleton = BV . V.singleton
@@ -308,6 +321,12 @@ bvFromList xs = BV (V.fromList xs)
 --   It is an error to request an out-of-bounds bit.
 (!) :: BV l -> Int -> l
 (!) v i = v `at` (length v - 1 - i)
+
+-- | Compute the maximum circuit depth of the bitvector.
+bvCircuitDepth :: IsAIG l g => g s -> BV (l s) -> IO Int
+bvCircuitDepth g (BV bv) =
+  do cnt <- depthCounter g
+     foldM (\n x -> max n <$> cnt x) 0 bv
 
 -- | Display a bitvector as a string of bits with most significant bits first.
 --   Concrete literals are displayed as '0' or '1', whereas symbolic literals are displayed as 'x'.
@@ -480,8 +499,13 @@ halfAdder g b c = do
 {-# INLINE fullAdder #-}
 fullAdder :: IsAIG l g => g s -> l s -> l s -> l s -> IO (l s, l s)
 fullAdder g a b c_in = do
-   s <- lXor' g c_in =<< lXor' g a b
-   c_out <- lOr g (lAnd' g a b) (lAnd'' g c_in (lXor' g a b))
+   ab      <- lAnd' g a b
+   a'b'    <- lAnd' g (not a) (not b)
+   xab     <- lAnd' g (not ab) (not a'b')
+   xab_c   <- lAnd' g xab c_in
+   xab'_c' <- lAnd' g (not xab) (not c_in)
+   s       <- lAnd' g (not xab_c) (not xab'_c')
+   c_out   <- lOr' g ab xab_c
    return (s, c_out)
 
 -- | Implements a ripple carry adder.  Both addends are assumed to have
@@ -620,10 +644,57 @@ mul g x y = assert (length x == length y) $ do
 --   resulting in a vector of size @m+n@.
 mulFull :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
 mulFull g x y =
+   let len = length x + length y
+       x' = zext g x len
+       y' = zext g y len
+    in mul g x' y'
+
+-- | Unsigned multiply two bitvectors with size @m@ and size @n@,
+--   resulting in a vector of size @m+n@.  This algorithm uses
+--   Wallace tree reduction.  This reduces the depth of the circuit
+--   and the number of gates relative to the standard multiplication
+--   algorithm.  However, it appears to perform less well for most
+--   verification tasks.
+wallaceMultiply :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
+wallaceMultiply g x y =
+  do t <- multTree g x y
+     let fa d b0 b1 b2 =
+          do (s,c) <- fullAdder g b0 b1 b2
+             return (d+4, c, s)
+     let ha d b0 b1 =
+          do (s,c) <- halfAdder g b0 b1
+             return (d+3, c, s)
+     BV <$> wallaceTreeReduction (falseLit g) fa ha t
+
+-- | Unsigned multiply two bitvectors with size @m@ and size @n@,
+--   resulting in a vector of size @m+n@.  This algorithm uses
+--   Dadda tree reduction.  This reduces the depth of the circuit
+--   and the number of gates relative to the standard multiplication
+--   algorithm, and is a minor improvement on both metrics over Wallace
+--   tree multiplication.  As with Wallace multiplication, this algorithm
+--   performs less well than the standard multplication for verification tasks.
+daddaMultiply :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
+daddaMultiply g x y =
+  do t <- multTree g x y
+     let fa d b0 b1 b2 =
+          do (s,c) <- fullAdder g b0 b1 b2
+             return (d+4, c, s)
+     let ha d b0 b1 =
+          do (s,c) <- halfAdder g b0 b1
+             return (d+3, c, s)
+     BV <$> daddaTreeReduction (falseLit g) fa ha t
+
+multTree :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (AddTree (l s))
+multTree g x y =
+ do let lenx = length x
+    let leny = length y
     let len = length x + length y
-        x' = zext g x len
-        y' = zext g y len
-     in mul g x' y'
+    t <- newAddTree len
+    forM_ [0..lenx-1] $ \i ->
+      forM_ [0..leny-1] $ \j ->
+        do z <- lAnd' g (x!i) (y!j)
+           pushBit (i+j) (0, z) t
+    return t
 
 -- | Signed multiply two bitvectors with size @m@ and size @n@,
 --   resulting in a vector of size @m+n@.
@@ -896,6 +967,44 @@ ror g x0 (BV ys) = fst <$> V.foldM f (x0, 1) (V.reverse ys)
       x' <- ite g y (rorC x p) x
       let p' = (2*p) `mod` length x0
       return (x', p')
+
+-- | Count the number of set bits in the given bitvector.  The output
+--   bitvector will be of the same width as the input.  Uses an
+--   addition reduction tree to compute the popcount.
+popCount ::
+  IsAIG l g =>
+  g s ->
+  BV (l s) ->
+  IO (BV (l s))
+popCount g bv =
+  do let n = length bv
+     t <- newAddTree n
+     forM_ [0 .. n-1] $ \i ->
+       let b = bv!i in
+       if | b === falseLit g -> return ()
+          | b === trueLit g  -> pushBit 0 (0, b) t
+          | otherwise        -> pushBit 0 (1, b) t
+     let fa d b0 b1 b2 =
+          do (s,c) <- fullAdder g b0 b1 b2
+             return (d+4, c, s)
+     let ha d b0 b1 =
+          do (s,c) <- halfAdder g b0 b1
+             return (d+3, c, s)
+     BV <$> daddaTreeReduction (falseLit g) fa ha t
+
+-- | Count the number of set bits in the given bitvector.  The output
+--   bitvector will be of the same width as the input.  Uses a linear
+--   sequence of increments to compute the popcount.
+popCount' :: IsAIG l g => g s -> BV (l s) -> IO (BV (l s))
+popCount' g x = do
+  -- Create mutable array to store result.
+  let n = length x
+  -- Function to update bits.
+  let updateBits i z | i == n = return z
+      updateBits i z = do
+        z' <- iteM g (x ! i) (addConst g z 1) (return z)
+        updateBits (i+1) z'
+  updateBits 0 $ replicate (length x) (falseLit g)
 
 
 -- | Compute the rounded-down base2 logarithm of the input bitvector.

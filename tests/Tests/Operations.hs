@@ -178,6 +178,8 @@ op_tests =
   , mkTest "logBase2_up"   log2up   AIG.logBase2_up
   , mkTest "clz"  clz AIG.countLeadingZeros
   , mkTest "ctz"  ctz AIG.countTrailingZeros
+  , mkTest "popcount" popCount64 AIG.popCount
+  , mkTest "popcount'" popCount64 AIG.popCount'
 
   , mkTest "pmul" pmul AIG.pmul
   , mkTest "pdiv" pdiv AIG.pdiv
@@ -238,6 +240,9 @@ clz = fromIntegral . countLeadingZeros
 
 ctz :: Word64 -> Word64
 ctz = fromIntegral . countTrailingZeros
+
+popCount64 ::  Word64 -> Word64
+popCount64 = fromIntegral . popCount
 
 pmul :: Word32 -> Word32 -> Word64
 pmul x y = foldr xor zeroBits pprods
