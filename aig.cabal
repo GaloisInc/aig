@@ -56,7 +56,7 @@ test-suite aig-test
   build-depends:
     base == 4.*,
     aig,
-    tasty < 1.2,
+    tasty < 1.3,
     -- tasty-ant-xml requires tasty < 1.2 to build
     tasty-ant-xml,
     tasty-quickcheck >= 0.8.1,
