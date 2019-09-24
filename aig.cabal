@@ -36,7 +36,7 @@ library
   ghc-options:      -Wall -fno-ignore-asserts
   build-depends:
     base >= 4 && < 4.13,
-    base-compat >= 0.6.0,
+    base-compat >= 0.6.0 && < 0.11.0,
     containers >= 0.5.5,
     mtl,
     vector,
