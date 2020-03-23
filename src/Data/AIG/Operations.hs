@@ -135,8 +135,8 @@ module Data.AIG.Operations
 
 import Control.Applicative hiding (empty)
 import Control.Exception (assert)
-import qualified Control.Monad
-import Control.Monad.State hiding (zipWithM, replicateM, mapM, sequence)
+import qualified Control.Monad hiding (fail)
+import Control.Monad.State hiding (zipWithM, replicateM, mapM, sequence, fail)
 import Data.Bits ((.|.), setBit, shiftL, testBit)
 #if MIN_VERSION_base(4,8,0)
 import qualified Data.Bits as Bits
