@@ -35,8 +35,7 @@ library
   default-Language: Haskell2010
   ghc-options:      -Wall -fno-ignore-asserts
   build-depends:
-    base >= 4 && < 4.16,
-    base-compat >= 0.6.0 && < 0.12,
+    base >= 4.9 && < 4.16,
     containers >= 0.5.5,
     mtl,
     vector,

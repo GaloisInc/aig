@@ -14,7 +14,6 @@ that can be built from the primitive And-Inverter Graph interface.
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE CPP #-}
 module Data.AIG.Operations
   ( -- * Bitvectors
     BV
@@ -138,17 +137,14 @@ import Control.Exception (assert)
 import qualified Control.Monad hiding (fail)
 import Control.Monad.State hiding (zipWithM, replicateM, mapM, sequence, fail)
 import Data.Bits ((.|.), setBit, shiftL, testBit)
-#if MIN_VERSION_base(4,8,0)
 import qualified Data.Bits as Bits
-#endif
 
 import qualified Data.Vector as V
 import qualified Data.Vector.Generic.Mutable as MV
 
-import Prelude()
-import Prelude.Compat
+import Prelude
   hiding (and, concat, length, not, or, replicate, splitAt, tail, (++), take, drop, zipWith, mapM)
-import qualified Prelude.Compat as Prelude
+import qualified Prelude as Prelude
 
 import Data.AIG.Interface
 import Data.AIG.AddTree
@@ -1073,14 +1069,7 @@ countTrailingZeros g (BV v) = do
 --   This is the floor of the lg2 function.  We extend the function so
 --   intLog2_down 0 = -1.
 intLog2_down :: Int -> Int
-#if MIN_VERSION_base(4,8,0)
 intLog2_down x = (Bits.finiteBitSize x - 1) - Bits.countLeadingZeros x
-#else
-intLog2_down x
-   | x <= 0    = -1
-intLog2_down 1 =  0
-intLog2_down x =  1 + intLog2_down (x `div` 2)
-#endif
 
 -- | Given positive x, find the unique i such that: 2^(i-1) < x <= 2^i
 --   This is the ceiling of the lg2 function.
