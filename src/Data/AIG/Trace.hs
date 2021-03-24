@@ -22,6 +22,7 @@ module Data.AIG.Trace where
 
 import Prelude hiding (not, and, or)
 import Data.IORef
+import Data.Kind
 import Data.List (intersperse)
 import System.IO
 import Control.Exception
@@ -36,7 +37,7 @@ class Traceable l where
 
 newtype TraceLit l s = TraceLit { unTraceLit :: l s }
 
-data TraceGraph (l :: * -> * ) g s
+data TraceGraph (l :: Type -> Type) g s
    = TraceGraph
    { tGraph :: g s
    , tActive :: IORef (Maybe Handle)
