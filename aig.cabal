@@ -28,6 +28,7 @@ library
   exposed-modules:
     Data.AIG
     Data.AIG.AddTree
+    Data.AIG.CompactGraph
     Data.AIG.Interface
     Data.AIG.Operations
     Data.AIG.Trace
@@ -35,7 +36,8 @@ library
   default-Language: Haskell2010
   ghc-options:      -Wall -fno-ignore-asserts
   build-depends:
-    base >= 4.9 && < 4.16,
+    base >= 4 && < 4.16,
+    base-compat >= 0.6.0 && < 0.12,
     containers >= 0.5.5,
     mtl,
     vector,
