@@ -6,7 +6,8 @@ Maintainer  : atomb@galois.com
 Stability   : experimental
 Portability : portable
 
-Interfaces for building, simulating and analysing And-Inverter Graphs (AIG).
+A pure Haskell implementation of the IsAIG class with support for AIGER
+and CNF file creation.
 -}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -45,8 +46,11 @@ nextVar (Var v) = Var (v + 1)
 data CompactGraph s =
   CompactGraph {
     maxVar  :: IORef Var
-  , inputs  :: IORef [Var] -- ^ Inputs, in reverse order!
+    -- ^ The largest variable ID used so far.
+  , inputs  :: IORef [Var]
+    -- ^ Inputs, in reverse order!
   , andMap  :: IORef (Map Var (CompactLit s, CompactLit s))
+    -- ^ A map from and gate variables to their input literals.
   }
 
 ------------------------------------------------------------------
@@ -70,21 +74,23 @@ modeString Binary = "aig"
 bsUnwords :: [BS.Builder] -> BS.Builder
 bsUnwords = mconcat . intersperse (BS.charUtf8 ' ')
 
-newline :: BS.Builder
-newline = BS.charUtf8 '\n'
-
 compactProxy :: Proxy CompactLit CompactGraph
 compactProxy = Proxy (\x -> x)
 
+-- | Turn a variable into its positive literal.
 varToLit :: Var -> CompactLit s
 varToLit (Var v) = CompactLit (v `shiftL` 1)
 
+-- | Extract the variable a literal refers to.
 litToVar :: CompactLit s -> Var
 litToVar (CompactLit l) = Var (l `shiftR` 1)
 
+-- | Determine whether the given literal is negated.
 litNegated :: CompactLit s -> Bool
 litNegated (CompactLit l) = testBit l 0
 
+-- | Return the second literal with its polarity altered to match the
+-- first.
 copySign :: CompactLit s -> CompactLit s -> CompactLit s
 copySign (CompactLit src) (CompactLit dst) =
   CompactLit ((dst .&. 0xFFFFFFFE) .|. (src .&. 0x00000001))
@@ -101,6 +107,9 @@ newVar g =
   do modifyIORef' (maxVar g) nextVar
      readIORef (maxVar g)
 
+-- | Create a map associating a new destination variable with each
+-- existing variable. Used to ensure the ordering invariants of the
+-- binary AIGER file format.
 mkVarMap ::
   [Var] ->
   Map Var (CompactLit s, CompactLit s) ->
@@ -110,12 +119,14 @@ mkVarMap ins gateMap =
     where
       varList = [Var 0] ++ ins ++ Map.keys gateMap
 
+-- | Adjust a literal according to the given variable mapping.
 lookupLit :: CompactLit s -> Map Var Var -> Maybe (CompactLit s)
 lookupLit l m = (copySign l . varToLit) <$> Map.lookup (litToVar l) m
 
 hPutBBLn :: Handle -> BS.Builder -> IO ()
-hPutBBLn h b = BS.hPutBuilder h (b <> newline)
+hPutBBLn h b = BS.hPutBuilder h (b <> BS.charUtf8 '\n')
 
+-- | Write an AIGER header line to the given handle.
 writeHeader ::
   Handle ->
   AIGFileMode ->
@@ -134,6 +145,7 @@ writeHeader h format (Var var) ins latches outs gateMap =
                             , BS.intDec (Map.size gateMap)
                             ]
 
+-- | Write AIGER input lines to the given handle.
 writeInputs :: Handle -> AIGFileMode -> Int -> Map Var Var -> [Var] -> IO ()
 writeInputs _ Binary _ _ _ = return ()
 writeInputs h ASCII latches varMap ins =
@@ -143,6 +155,7 @@ writeInputs h ASCII latches varMap ins =
       Nothing -> fail $ "Input not found: " ++ show v
   where inCount = length ins - latches
 
+-- | Write AIGER latch lines to the given handle.
 writeLatches ::
   Handle ->
   AIGFileMode ->
@@ -166,6 +179,7 @@ writeLatches h format latches varMap ins outs =
     outCount = length outs - latches
     latchPairs = zip (drop inCount ins) (drop outCount outs)
 
+-- | Write AIGER output lines to the given handle.
 writeOutputs :: Handle -> Int -> Map Var Var -> [CompactLit s] -> IO ()
 writeOutputs h latches varMap outs =
   forM_ (take outCount outs) $ \l ->
@@ -174,6 +188,7 @@ writeOutputs h latches varMap outs =
       Nothing -> fail $ "Output not found: " ++ show l
   where outCount = length outs - latches
 
+-- | Write AIGER and gate lines or bytes to the given handle.
 writeAnds ::
   Handle ->
   AIGFileMode ->
@@ -189,6 +204,7 @@ writeAnds h format varMap gateMap =
         writeAnd h format vi li ri
       _ -> fail $ "And not found: " ++ show (l, r)
 
+-- | Helper for @writeAnds@ to write the actual content of the gate.
 writeAnd ::
   Handle ->
   AIGFileMode ->
@@ -207,6 +223,8 @@ writeAnd h format (CompactLit v) (CompactLit l) (CompactLit r) =
       do BS.hPutBuilder h (encodeDifference (v - l))
          BS.hPutBuilder h (encodeDifference (l - r))
 
+-- | Encode a 32-bit value, representing a difference, in a variable
+-- number of bytes.
 encodeDifference :: Word32 -> BS.Builder
 encodeDifference w@(fromIntegral -> b)
   | w < 0x80 = BS.word8 b
@@ -292,7 +310,6 @@ instance IsAIG CompactLit CompactGraph where
        putClause [ovar]
        putClause [-1]
        return [2 .. length ins + 1]
-
 
   checkSat _g _l =
     fail "Cannot SAT check graphs in the CompactGraph implementation"
