@@ -36,7 +36,7 @@ library
   default-Language: Haskell2010
   ghc-options:      -Wall -fno-ignore-asserts
   build-depends:
-    base >= 4 && < 4.16,
+    base >= 4.9 && < 4.16,
     bytestring,
     containers >= 0.5.5,
     mtl,
