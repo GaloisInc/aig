@@ -113,6 +113,9 @@ mkVarMap ins gateMap =
 lookupLit :: CompactLit s -> Map Var Var -> Maybe (CompactLit s)
 lookupLit l m = (copySign l . varToLit) <$> Map.lookup (litToVar l) m
 
+hPutBBLn :: Handle -> BS.Builder -> IO ()
+hPutBBLn h b = BS.hPutBuilder h (b <> newline)
+
 writeHeader ::
   Handle ->
   AIGFileMode ->
@@ -123,20 +126,20 @@ writeHeader ::
   Map Var (CompactLit s, CompactLit s) ->
   IO ()
 writeHeader h format (Var var) ins latches outs gateMap =
-  do BS.hPutBuilder h $ bsUnwords [ BS.byteString (modeString format)
-                                  , BS.word32Dec var
-                                  , BS.intDec (length ins)
-                                  , BS.intDec latches
-                                  , BS.intDec (length outs)
-                                  , BS.intDec (Map.size gateMap)
-                                  ] <> newline
+  do hPutBBLn h $ bsUnwords [ BS.byteString (modeString format)
+                            , BS.word32Dec var
+                            , BS.intDec (length ins)
+                            , BS.intDec latches
+                            , BS.intDec (length outs)
+                            , BS.intDec (Map.size gateMap)
+                            ]
 
 writeInputs :: Handle -> AIGFileMode -> Int -> Map Var Var -> [Var] -> IO ()
 writeInputs _ Binary _ _ _ = return ()
 writeInputs h ASCII latches varMap ins =
   forM_ (take inCount ins) $ \v ->
     case varToLit <$> Map.lookup v varMap of
-      Just (CompactLit i) -> BS.hPutBuilder h (BS.word32Dec i <> newline)
+      Just (CompactLit i) -> hPutBBLn h $ BS.word32Dec i
       Nothing -> fail $ "Input not found: " ++ show v
   where inCount = length ins - latches
 
@@ -153,10 +156,10 @@ writeLatches h format latches varMap ins outs =
     case (Map.lookup v varMap, lookupLit n varMap) of
       (Just (Var vi), Just (CompactLit ni)) ->
         case format of
-          ASCII -> BS.hPutBuilder h $ bsUnwords [ BS.word32Dec vi
-                                                , BS.word32Dec ni
-                                                ] <> newline
-          Binary -> BS.hPutBuilder h $ BS.word32Dec ni <> newline
+          ASCII -> hPutBBLn h $ bsUnwords [ BS.word32Dec vi
+                                          , BS.word32Dec ni
+                                          ]
+          Binary -> hPutBBLn h $ BS.word32Dec ni
       _ -> fail $ "Latch not found: " ++ show v ++ " " ++ show n
   where
     inCount = length ins - latches
@@ -167,7 +170,7 @@ writeOutputs :: Handle -> Int -> Map Var Var -> [CompactLit s] -> IO ()
 writeOutputs h latches varMap outs =
   forM_ (take outCount outs) $ \l ->
     case copySign l <$> lookupLit l varMap of
-      Just (CompactLit i) -> BS.hPutBuilder h $ BS.word32Dec i <> newline
+      Just (CompactLit i) -> hPutBBLn h $ BS.word32Dec i
       Nothing -> fail $ "Output not found: " ++ show l
   where outCount = length outs - latches
 
@@ -196,18 +199,18 @@ writeAnd ::
 writeAnd h format (CompactLit v) (CompactLit l) (CompactLit r) =
   case format of
     ASCII ->
-      BS.hPutBuilder h $ bsUnwords [ BS.word32Dec v
-                                   , BS.word32Dec l
-                                   , BS.word32Dec r
-                                   ] <> newline
+      hPutBBLn h $ bsUnwords [ BS.word32Dec v
+                             , BS.word32Dec l
+                             , BS.word32Dec r
+                             ]
     Binary ->
       do BS.hPutBuilder h (encodeDifference (v - l))
          BS.hPutBuilder h (encodeDifference (l - r))
 
 encodeDifference :: Word32 -> BS.Builder
-encodeDifference w
-  | w < 0x80 = BS.word8 (fromIntegral w)
-  | otherwise = BS.word8 (fromIntegral ((w .&. 0x7f) .|. 0x80)) <>
+encodeDifference w@(fromIntegral -> b)
+  | w < 0x80 = BS.word8 b
+  | otherwise = BS.word8 ((b .&. 0x7f) .|. 0x80) <>
                 encodeDifference (w `shiftR` 7)
 
 instance IsLit CompactLit where
@@ -256,8 +259,40 @@ instance IsAIG CompactLit CompactGraph where
        writeOutputs h latches vm outs
        writeAnds h format vm gateMap
 
-  writeCNF _g _l _fp =
-    fail "Cannot write CNF files from the CompactGraph implementation"
+  writeCNF g out fp =
+    withFile fp WriteMode $ \h ->
+    do Var var <- readIORef (maxVar g)
+       ins <- reverse <$> readIORef (inputs g)
+       gateMap <- readIORef (andMap g)
+       let vm = mkVarMap ins gateMap
+           nvars = fromIntegral var + 1
+           nclauses = (3 * Map.size gateMap) + 2
+           litToCNF lit =
+             case Map.lookup (litToVar lit) vm of
+               Just (Var v) ->
+                 do let n = fromIntegral v + 1
+                    return $ if litNegated lit then (-n) else n
+               Nothing -> fail $ "Literal not found: " ++ show lit
+           putClause lits =
+             hPutBBLn h $ (bsUnwords . map BS.intDec) lits <> " 0"
+       hPutBBLn h $ bsUnwords [ "p", "cnf"
+                              , BS.intDec nvars
+                              , BS.intDec nclauses
+                              ]
+       forM_ (Map.assocs gateMap) $ \(v, (ll, rl)) ->
+         do n <- litToCNF (varToLit v)
+            li <- litToCNF ll
+            ri <- litToCNF rl
+            -- 3 clauses for each gate
+            putClause [-n, li]
+            putClause [-n, ri]
+            putClause [n, -li, -ri]
+       ovar <- litToCNF out
+       -- 2 more clauses
+       putClause [ovar]
+       putClause [-1]
+       return [2 .. length ins + 1]
+
 
   checkSat _g _l =
     fail "Cannot SAT check graphs in the CompactGraph implementation"
@@ -270,18 +305,19 @@ instance IsAIG CompactLit CompactGraph where
     fail "evaluator not implemented (TODO)"
 
   -- | Examine the outermost structure of a literal to see how it was
-  -- constructed
+  -- constructed. This could certainly be made more efficient if
+  -- necessary.
   litView g l =
-    do ins <- reverse <$> readIORef (inputs g) -- TODO: this will be slow
+    do ins <- reverse <$> readIORef (inputs g)
        gateMap <- readIORef (andMap g)
        let v = litToVar l
-       case (elemIndex v ins, Map.lookup v gateMap) of
-         (Just i, _) -> return (f i)
-           where f = if litNegated l then NotInput else Input
-         (_, Just (l1, l2)) -> return (f l1 l2)
-           where f = if litNegated l then NotAnd else And
-         _ | l == falseLit g -> return FalseLit
-         _ | l == trueLit g -> return TrueLit
+       case (elemIndex v ins, Map.lookup v gateMap, litNegated l) of
+         (Just i, _, False)        -> return (Input i)
+         (Just i, _, True)         -> return (NotInput i)
+         (_, Just (l1, l2), False) -> return (And l1 l2)
+         (_, Just (l1, l2), True)  -> return (NotAnd l1 l2)
+         _ | l == falseLit g       -> return FalseLit
+         _ | l == trueLit g        -> return TrueLit
          _ -> fail $ "Invalid literal: " ++ show l
 
   -- | Build an evaluation function over an AIG using the provided view
