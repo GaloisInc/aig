@@ -13,6 +13,7 @@ Interfaces for building, simulating and analysing And-Inverter Graphs (AIG).
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Data.AIG.CompactGraph
   ( CompactGraph
   , CompactLit
@@ -23,11 +24,13 @@ module Data.AIG.CompactGraph
 import Control.Monad (forM_)
 import Data.Bits (shiftL, shiftR, (.&.), (.|.), xor, testBit)
 import Data.IORef (IORef, newIORef, modifyIORef', readIORef)
-import Data.List (elemIndex)
+import Data.List (elemIndex, intersperse)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Builder as BS
 import Data.Word (Word32)
-import System.IO (Handle, withFile, IOMode(..), hPutStrLn)
+import System.IO (Handle, withFile, IOMode(..))
 
 import Data.AIG.Interface hiding (xor)
 
@@ -52,6 +55,23 @@ newtype CompactLit s = CompactLit Word32
  deriving (Eq, Ord, Show)
 
 type CompactNetwork s = Network CompactLit CompactGraph
+
+-- | The type of AIGER file to create. We don't currently support user
+-- specification of this. The distinction primarily exists to ease
+-- debugging.
+data AIGFileMode
+  = ASCII
+  | Binary
+
+modeString :: AIGFileMode -> BS.ByteString
+modeString ASCII = "aag"
+modeString Binary = "aig"
+
+bsUnwords :: [BS.Builder] -> BS.Builder
+bsUnwords = mconcat . intersperse (BS.charUtf8 ' ')
+
+newline :: BS.Builder
+newline = BS.charUtf8 '\n'
 
 compactProxy :: Proxy CompactLit CompactGraph
 compactProxy = Proxy (\x -> x)
@@ -95,41 +115,48 @@ lookupLit l m = (copySign l . varToLit) <$> Map.lookup (litToVar l) m
 
 writeHeader ::
   Handle ->
+  AIGFileMode ->
   Var ->
   [Var] ->
   Int ->
   [CompactLit s] ->
   Map Var (CompactLit s, CompactLit s) ->
   IO ()
-writeHeader h (Var var) ins latches outs gateMap =
-  do hPutStrLn h $ unwords [ "aag"
-                           , show var
-                           , show (length ins)
-                           , show latches
-                           , show (length outs)
-                           , show (Map.size gateMap)
-                           ]
+writeHeader h format (Var var) ins latches outs gateMap =
+  do BS.hPutBuilder h $ bsUnwords [ BS.byteString (modeString format)
+                                  , BS.word32Dec var
+                                  , BS.intDec (length ins)
+                                  , BS.intDec latches
+                                  , BS.intDec (length outs)
+                                  , BS.intDec (Map.size gateMap)
+                                  ] <> newline
 
-writeInputs :: Handle -> Int -> Map Var Var -> [Var] -> IO ()
-writeInputs h latches varMap ins =
+writeInputs :: Handle -> AIGFileMode -> Int -> Map Var Var -> [Var] -> IO ()
+writeInputs _ Binary _ _ _ = return ()
+writeInputs h ASCII latches varMap ins =
   forM_ (take inCount ins) $ \v ->
     case varToLit <$> Map.lookup v varMap of
-      Just (CompactLit i) -> hPutStrLn h (show i)
+      Just (CompactLit i) -> BS.hPutBuilder h (BS.word32Dec i <> newline)
       Nothing -> fail $ "Input not found: " ++ show v
   where inCount = length ins - latches
 
 writeLatches ::
   Handle ->
+  AIGFileMode ->
   Int ->
   Map Var Var ->
   [Var] ->
   [CompactLit s] ->
   IO ()
-writeLatches h latches varMap ins outs =
+writeLatches h format latches varMap ins outs =
   forM_ latchPairs $ \(v, n) ->
     case (Map.lookup v varMap, lookupLit n varMap) of
       (Just (Var vi), Just (CompactLit ni)) ->
-        hPutStrLn h $ unwords [show vi, show ni]
+        case format of
+          ASCII -> BS.hPutBuilder h $ bsUnwords [ BS.word32Dec vi
+                                                , BS.word32Dec ni
+                                                ] <> newline
+          Binary -> BS.hPutBuilder h $ BS.word32Dec ni <> newline
       _ -> fail $ "Latch not found: " ++ show v ++ " " ++ show n
   where
     inCount = length ins - latches
@@ -140,21 +167,48 @@ writeOutputs :: Handle -> Int -> Map Var Var -> [CompactLit s] -> IO ()
 writeOutputs h latches varMap outs =
   forM_ (take outCount outs) $ \l ->
     case copySign l <$> lookupLit l varMap of
-      Just (CompactLit i) -> hPutStrLn h (show i)
+      Just (CompactLit i) -> BS.hPutBuilder h $ BS.word32Dec i <> newline
       Nothing -> fail $ "Output not found: " ++ show l
   where outCount = length outs - latches
 
 writeAnds ::
   Handle ->
+  AIGFileMode ->
   Map Var Var ->
   Map Var (CompactLit s, CompactLit s) ->
   IO ()
-writeAnds h varMap gateMap =
+writeAnds h format varMap gateMap =
   forM_ (Map.assocs gateMap) $ \(v, (l, r)) ->
-    case (varToLit <$> Map.lookup v varMap, lookupLit l varMap, lookupLit r varMap) of
-      (Just (CompactLit v'), Just (CompactLit li), Just (CompactLit ri)) ->
-        hPutStrLn h $ unwords [show v', show li, show ri]
+    case (varToLit <$> Map.lookup v varMap
+         , lookupLit l varMap
+         , lookupLit r varMap) of
+      (Just vi, Just li, Just ri) ->
+        writeAnd h format vi li ri
       _ -> fail $ "And not found: " ++ show (l, r)
+
+writeAnd ::
+  Handle ->
+  AIGFileMode ->
+  CompactLit s ->
+  CompactLit s ->
+  CompactLit s ->
+  IO ()
+writeAnd h format (CompactLit v) (CompactLit l) (CompactLit r) =
+  case format of
+    ASCII ->
+      BS.hPutBuilder h $ bsUnwords [ BS.word32Dec v
+                                   , BS.word32Dec l
+                                   , BS.word32Dec r
+                                   ] <> newline
+    Binary ->
+      do BS.hPutBuilder h (encodeDifference (v - l))
+         BS.hPutBuilder h (encodeDifference (l - r))
+
+encodeDifference :: Word32 -> BS.Builder
+encodeDifference w
+  | w < 0x80 = BS.word8 (fromIntegral w)
+  | otherwise = BS.word8 (fromIntegral ((w .&. 0x7f) .|. 0x80)) <>
+                encodeDifference (w `shiftR` 7)
 
 instance IsLit CompactLit where
   not (CompactLit x) = CompactLit (x `xor` 1)
@@ -195,17 +249,12 @@ instance IsAIG CompactLit CompactGraph where
        ins <- reverse <$> readIORef (inputs g)
        gateMap <- readIORef (andMap g)
        let vm = mkVarMap ins gateMap
-       {-
-       print vm
-       print ins
-       print outs
-       print gateMap
-       -}
-       writeHeader h var ins latches outs gateMap
-       writeInputs h latches vm ins
-       writeLatches h latches vm ins outs
+           format = Binary
+       writeHeader h format var ins latches outs gateMap
+       writeInputs h format latches vm ins
+       writeLatches h format latches vm ins outs
        writeOutputs h latches vm outs
-       writeAnds h vm gateMap
+       writeAnds h format vm gateMap
 
   writeCNF _g _l _fp =
     fail "Cannot write CNF files from the CompactGraph implementation"
@@ -220,7 +269,8 @@ instance IsAIG CompactLit CompactGraph where
   evaluator _g _xs =
     fail "evaluator not implemented (TODO)"
 
-  -- | Examine the outermost structure of a literal to see how it was constructed
+  -- | Examine the outermost structure of a literal to see how it was
+  -- constructed
   litView g l =
     do ins <- reverse <$> readIORef (inputs g) -- TODO: this will be slow
        gateMap <- readIORef (andMap g)
@@ -234,6 +284,7 @@ instance IsAIG CompactLit CompactGraph where
          _ | l == trueLit g -> return TrueLit
          _ -> fail $ "Invalid literal: " ++ show l
 
-  -- | Build an evaluation function over an AIG using the provided view function
+  -- | Build an evaluation function over an AIG using the provided view
+  -- function
   abstractEvaluateAIG _g _f =
     fail "Function abstractEvaluateAIG not implemented for CompactGraph (TODO)"

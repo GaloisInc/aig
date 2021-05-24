@@ -38,6 +38,7 @@ library
   build-depends:
     base >= 4 && < 4.16,
     base-compat >= 0.6.0 && < 0.12,
+    bytestring,
     containers >= 0.5.5,
     mtl,
     vector,
