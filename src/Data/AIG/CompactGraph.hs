@@ -20,15 +20,19 @@ module Data.AIG.CompactGraph
   , CompactLit
   , CompactNetwork
   , compactProxy
+  , newCompactGraph
   ) where
 
-import Control.Monad (forM_)
+import Control.Monad (forM_, replicateM)
+import Data.Binary.Get
+import qualified Data.Binary.Parser as BP
 import Data.Bits (shiftL, shiftR, (.&.), (.|.), xor, testBit)
 import Data.IORef (IORef, newIORef, modifyIORef', readIORef)
 import Data.List (elemIndex, intersperse)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Builder as BS
 import Data.Word (Word32)
 import System.IO (Handle, withFile, IOMode(..))
@@ -60,22 +64,11 @@ newtype CompactLit s = CompactLit Word32
 
 type CompactNetwork s = Network CompactLit CompactGraph
 
--- | The type of AIGER file to create. We don't currently support user
--- specification of this. The distinction primarily exists to ease
--- debugging.
-data AIGFileMode
-  = ASCII
-  | Binary
-
-modeString :: AIGFileMode -> BS.ByteString
-modeString ASCII = "aag"
-modeString Binary = "aig"
-
-bsUnwords :: [BS.Builder] -> BS.Builder
-bsUnwords = mconcat . intersperse (BS.charUtf8 ' ')
-
 compactProxy :: Proxy CompactLit CompactGraph
 compactProxy = Proxy (\x -> x)
+
+------------------------------------------------------------------
+-- Core data structure operations
 
 -- | Turn a variable into its positive literal.
 varToLit :: Var -> CompactLit s
@@ -122,6 +115,26 @@ mkVarMap ins gateMap =
 -- | Adjust a literal according to the given variable mapping.
 lookupLit :: CompactLit s -> Map Var Var -> Maybe (CompactLit s)
 lookupLit l m = (copySign l . varToLit) <$> Map.lookup (litToVar l) m
+
+------------------------------------------------------------------
+-- AIG format
+
+-- | The type of AIGER file to create. We don't currently support user
+-- specification of this. The distinction primarily exists to ease
+-- debugging.
+data AIGFileMode
+  = ASCII
+  | Binary
+
+modeString :: AIGFileMode -> BS.ByteString
+modeString ASCII = "aag"
+modeString Binary = "aig"
+
+------------------------------------------------------------------
+-- AIG generation
+
+bsUnwords :: [BS.Builder] -> BS.Builder
+bsUnwords = mconcat . intersperse (BS.charUtf8 ' ')
 
 hPutBBLn :: Handle -> BS.Builder -> IO ()
 hPutBBLn h b = BS.hPutBuilder h (b <> BS.charUtf8 '\n')
@@ -231,6 +244,68 @@ encodeDifference w@(fromIntegral -> b)
   | otherwise = BS.word8 ((b .&. 0x7f) .|. 0x80) <>
                 encodeDifference (w `shiftR` 7)
 
+------------------------------------------------------------------
+-- AIG parsing
+
+spaces :: Get ()
+spaces = BP.skipWhile BP.isHorizontalSpace
+
+getIntWords :: Get [Int]
+getIntWords = BP.decimal `BP.sepBy` spaces
+
+getIntWordsLine :: Get [Int]
+getIntWordsLine = getIntWords <* BP.skipWhile BP.isEndOfLine
+
+getHeader :: Get (Int, Int, Int, Int, Int)
+getHeader =
+  do BP.string (modeString Binary)
+     spaces
+     ns <- getIntWordsLine
+     case ns of
+       [m, i, l, o, a] -> return (m, i, l, o, a)
+       _ -> fail $ "Invalid AIG header: " ++ show ns
+
+getOutput :: Get (CompactLit s)
+getOutput =
+  do ns <- getIntWordsLine
+     case ns of
+       [n] -> return (CompactLit (fromIntegral n))
+       _ -> fail $ "Invalid output line: " ++ show ns
+
+getDifference :: Get Word32
+getDifference = go 0 0
+  where
+    addByte x b i = x .|. (((fromIntegral b) .&. 0x7f) `shiftL` (7*i))
+    go x i =
+      do b <- getWord8
+         let x' = addByte x b i
+         if b .&. 0x80 /= 0 then go x' (i + 1) else return x'
+
+getDifferences :: Get (Word32, Word32)
+getDifferences = (,) <$> getDifference <*> getDifference
+
+getGraph :: Get (Var, [Var], [CompactLit s], Map Var (CompactLit s, CompactLit s))
+getGraph =
+  do (maxvar, ninputs, nlatches, nouts, nands) <- getHeader
+     outputs <- replicateM (nlatches + nouts) getOutput
+     diffPairs <- replicateM nands getDifferences
+     let maxInput = fromIntegral ninputs
+         inputs = [Var 1 .. Var maxInput]
+         andVars = take (length diffPairs) [(maxInput + 1) ..]
+         addDiff v (ld, rd) = (Var v, (CompactLit l, CompactLit r))
+           where
+             l = (v `shiftL` 1) - ld
+             r = l - rd
+         andAssocs = zipWith addDiff andVars diffPairs
+     return ( Var (fromIntegral maxvar)
+            , reverse inputs
+            , outputs
+            , Map.fromList andAssocs
+            )
+
+------------------------------------------------------------------
+-- Class instances
+
 instance IsLit CompactLit where
   not (CompactLit x) = CompactLit (x `xor` 1)
   (===) = (==)
@@ -238,8 +313,12 @@ instance IsLit CompactLit where
 instance IsAIG CompactLit CompactGraph where
   withNewGraph _proxy k = k =<< newCompactGraph
 
-  aigerNetwork _proxy _fp =
-    fail "Cannot read AIGER files from the CompactGraph implementation"
+  aigerNetwork _proxy fp =
+    do (maxv, inps, outs, gates) <- runGet getGraph <$> LBS.readFile fp
+       maxVar  <- newIORef maxv
+       inputs  <- newIORef inps
+       andMap  <- newIORef gates
+       return (Network CompactGraph {..} outs)
 
   trueLit  _g = CompactLit 1
   falseLit _g = CompactLit 0
@@ -312,14 +391,16 @@ instance IsAIG CompactLit CompactGraph where
        return [2 .. length ins + 1]
 
   checkSat _g _l =
+    -- Could call out to ABC for this?
     fail "Cannot SAT check graphs in the CompactGraph implementation"
 
   cec _g1 _g2 =
+    -- Could call out to ABC for this?
     fail "Cannot CEC graphs in the CompactGraph implementation"
 
   -- | Evaluate the network on a set of concrete inputs.
   evaluator _g _xs =
-    fail "evaluator not implemented (TODO)"
+    fail "evaluator not implemented"
 
   -- | Examine the outermost structure of a literal to see how it was
   -- constructed. This could certainly be made more efficient if
@@ -340,4 +421,4 @@ instance IsAIG CompactLit CompactGraph where
   -- | Build an evaluation function over an AIG using the provided view
   -- function
   abstractEvaluateAIG _g _f =
-    fail "Function abstractEvaluateAIG not implemented for CompactGraph (TODO)"
+    fail "Function abstractEvaluateAIG not implemented for CompactGraph"

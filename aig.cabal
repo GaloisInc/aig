@@ -37,6 +37,8 @@ library
   ghc-options:      -Wall -fno-ignore-asserts
   build-depends:
     base >= 4.9 && < 4.16,
+    binary,
+    binary-parsers,
     bytestring,
     containers >= 0.5.5,
     mtl,
@@ -52,12 +54,16 @@ test-suite aig-test
 
   main-is: aig-test.hs
   other-modules:
+    Tests.FileIO
     Tests.Operations
 
   build-depends:
     base == 4.*,
     aig,
+    bytestring,
+    directory,
     tasty < 1.5,
+    tasty-hunit,
     tasty-ant-xml,
     tasty-quickcheck >= 0.8.1,
     QuickCheck >= 2.7
