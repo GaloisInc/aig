@@ -27,7 +27,7 @@ import Control.Monad (forM_, replicateM)
 import Data.Binary.Get
 import qualified Data.Binary.Parser as BP
 import Data.Bits (shiftL, shiftR, (.&.), (.|.), xor, testBit)
-import Data.IORef (IORef, newIORef, modifyIORef', readIORef)
+import Data.IORef (IORef, newIORef, modifyIORef', readIORef, writeIORef)
 import Data.List (elemIndex, intersperse)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -419,6 +419,26 @@ instance IsAIG CompactLit CompactGraph where
          _ -> fail $ "Invalid literal: " ++ show l
 
   -- | Build an evaluation function over an AIG using the provided view
-  -- function
-  abstractEvaluateAIG _g _f =
-    fail "Function abstractEvaluateAIG not implemented for CompactGraph"
+  -- function. Derived from the version in Data.ABC.AIG.
+  abstractEvaluateAIG g view =
+    do r <- newIORef Map.empty
+
+       let memo l t = do
+             m <- readIORef r
+             writeIORef r $! Map.insert l t m
+             return t
+
+           go (And x y)    = view =<< (pure And <*> objTerm x <*> objTerm y)
+           go (NotAnd x y) = view =<< (pure NotAnd <*> objTerm x <*> objTerm y)
+           go (Input i)    = view (Input i)
+           go (NotInput i) = view (NotInput i)
+           go TrueLit      = view TrueLit
+           go FalseLit     = view FalseLit
+
+           objTerm l =
+             do m <- readIORef r
+                case Map.lookup l m of
+                  Just t -> return t
+                  _ -> memo l =<< go =<< litView g l
+
+       return objTerm
