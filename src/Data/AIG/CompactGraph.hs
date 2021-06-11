@@ -303,6 +303,35 @@ getGraph =
             , Map.fromList andAssocs
             )
 
+abstractEval ::
+  CompactGraph s ->
+  (LitView a -> IO a) ->
+  IO (CompactLit s -> IO a, Map (CompactLit s) a)
+abstractEval g view =
+  do r <- newIORef Map.empty
+
+     let memo l t = do
+           m <- readIORef r
+           writeIORef r $! Map.insert l t m
+           return t
+
+         go (And x y)    = view =<< (pure And <*> objTerm x <*> objTerm y)
+         go (NotAnd x y) = view =<< (pure NotAnd <*> objTerm x <*> objTerm y)
+         go (Input i)    = view (Input i)
+         go (NotInput i) = view (NotInput i)
+         go TrueLit      = view TrueLit
+         go FalseLit     = view FalseLit
+
+         objTerm l =
+           do m <- readIORef r
+              case Map.lookup l m of
+                Just t -> return t
+                _ -> memo l =<< go =<< litView g l
+
+
+     m <- readIORef r
+     return (objTerm, m)
+
 ------------------------------------------------------------------
 -- Class instances
 
@@ -338,8 +367,7 @@ instance IsAIG CompactLit CompactGraph where
   inputCount g = length <$> readIORef (inputs g)
 
   -- | Get input at given index in the graph.
-  getInput _g _i =
-    fail "Function getInput not implemented for CompactGraph"
+  getInput g i = varToLit . (!! i) . reverse <$> readIORef (inputs g)
 
   writeAiger fp ntk = writeAigerWithLatches fp ntk 0
 
@@ -399,8 +427,16 @@ instance IsAIG CompactLit CompactGraph where
     fail "Cannot CEC graphs in the CompactGraph implementation"
 
   -- | Evaluate the network on a set of concrete inputs.
-  evaluator _g _xs =
-    fail "evaluator not implemented"
+  evaluator g xs =
+    do m <- snd <$> abstractEval g eval
+       return (m Map.!)
+    where
+      eval (And l r)    = return $ l && r
+      eval (NotAnd l r) = return $ Prelude.not (l && r)
+      eval (Input i)    = return $ xs !! i
+      eval (NotInput i) = return $ Prelude.not (xs !! i)
+      eval TrueLit      = return True
+      eval FalseLit     = return False
 
   -- | Examine the outermost structure of a literal to see how it was
   -- constructed. This could certainly be made more efficient if
@@ -420,25 +456,4 @@ instance IsAIG CompactLit CompactGraph where
 
   -- | Build an evaluation function over an AIG using the provided view
   -- function. Derived from the version in Data.ABC.AIG.
-  abstractEvaluateAIG g view =
-    do r <- newIORef Map.empty
-
-       let memo l t = do
-             m <- readIORef r
-             writeIORef r $! Map.insert l t m
-             return t
-
-           go (And x y)    = view =<< (pure And <*> objTerm x <*> objTerm y)
-           go (NotAnd x y) = view =<< (pure NotAnd <*> objTerm x <*> objTerm y)
-           go (Input i)    = view (Input i)
-           go (NotInput i) = view (NotInput i)
-           go TrueLit      = view TrueLit
-           go FalseLit     = view FalseLit
-
-           objTerm l =
-             do m <- readIORef r
-                case Map.lookup l m of
-                  Just t -> return t
-                  _ -> memo l =<< go =<< litView g l
-
-       return objTerm
+  abstractEvaluateAIG g view = fst <$> abstractEval g view
