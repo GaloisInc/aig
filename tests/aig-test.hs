@@ -4,6 +4,7 @@ import Test.Tasty
 import Test.Tasty.Ingredients
 import Test.Tasty.Runners.AntXML
 
+import Tests.FileIO
 import Tests.Operations
 
 ------------------------------------------------------------------------
@@ -26,4 +27,5 @@ tests :: TestTree
 tests =
     testGroup "AIG"
     [ testGroup "Bitvector operations" $ op_tests
+    , testGroup "File I/O" $ io_tests
     ]
