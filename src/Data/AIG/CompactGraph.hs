@@ -39,6 +39,8 @@ import System.IO (Handle, withFile, IOMode(..))
 
 import Data.AIG.Interface hiding (xor)
 
+-- | A variable representing either an input or the intermediate result
+-- of conjoining two literals of `CompactLit` type.
 newtype Var = Var Word32
   deriving (Eq, Ord, Show, Enum)
 
@@ -58,7 +60,10 @@ data CompactGraph s =
   }
 
 ------------------------------------------------------------------
--- | A literal in a CompactGraph.
+-- | A literal in a CompactGraph. A literal is a variable (of `Var`
+-- type) paired with an associated sign/polarity: either negated or
+-- non-negated. The compact `Word32` representation means that a graph
+-- can contain as most 2^^31-1 variables.
 newtype CompactLit s = CompactLit Word32
  deriving (Eq, Ord, Show)
 
@@ -160,6 +165,8 @@ writeHeader h format (Var var) ins latches outs gateMap =
 
 -- | Write AIGER input lines to the given handle.
 writeInputs :: Handle -> AIGFileMode -> Int -> Map Var Var -> [Var] -> IO ()
+-- Inputs are inferred in the binary format, and don't show up in the
+-- file, so we don't need to do anything for binary files.
 writeInputs _ Binary _ _ _ = return ()
 writeInputs h ASCII latches varMap ins =
   forM_ (take inCount ins) $ \v ->
