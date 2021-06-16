@@ -29,7 +29,9 @@ import qualified Data.Binary.Parser as BP
 import Data.Bits (shiftL, shiftR, (.&.), (.|.), xor, testBit)
 import Data.IORef (IORef, newIORef, modifyIORef', readIORef, writeIORef)
 import Data.List (elemIndex, intersperse)
-import Data.Map.Strict (Map)
+import Data.Bimap (Bimap)
+import Data.Map (Map)
+import qualified Data.Bimap as Bimap
 import qualified Data.Map.Strict as Map
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
@@ -55,7 +57,7 @@ data CompactGraph s =
     -- ^ The largest variable ID used so far.
   , inputs  :: IORef [Var]
     -- ^ Inputs, in reverse order!
-  , andMap  :: IORef (Map Var (CompactLit s, CompactLit s))
+  , andMap  :: IORef (Bimap Var (CompactLit s, CompactLit s))
     -- ^ A map from and gate variables to their input literals.
   }
 
@@ -97,7 +99,7 @@ newCompactGraph :: IO (CompactGraph s)
 newCompactGraph =
   do maxVar  <- newIORef (Var 0)
      inputs  <- newIORef []
-     andMap  <- newIORef Map.empty
+     andMap  <- newIORef Bimap.empty
      return (CompactGraph {..})
 
 newVar :: CompactGraph s -> IO Var
@@ -110,12 +112,12 @@ newVar g =
 -- binary AIGER file format.
 mkVarMap ::
   [Var] ->
-  Map Var (CompactLit s, CompactLit s) ->
+  Bimap Var (CompactLit s, CompactLit s) ->
   (Map Var Var)
 mkVarMap ins gateMap =
   Map.fromList (zip varList [Var 0..])
     where
-      varList = [Var 0] ++ ins ++ Map.keys gateMap
+      varList = [Var 0] ++ ins ++ Bimap.keys gateMap
 
 -- | Adjust a literal according to the given variable mapping.
 lookupLit :: CompactLit s -> Map Var Var -> Maybe (CompactLit s)
@@ -152,7 +154,7 @@ writeHeader ::
   [Var] ->
   Int ->
   [CompactLit s] ->
-  Map Var (CompactLit s, CompactLit s) ->
+  Bimap Var (CompactLit s, CompactLit s) ->
   IO ()
 writeHeader h format (Var var) ins latches outs gateMap =
   do hPutBBLn h $ bsUnwords [ BS.byteString (modeString format)
@@ -160,7 +162,7 @@ writeHeader h format (Var var) ins latches outs gateMap =
                             , BS.intDec (length ins)
                             , BS.intDec latches
                             , BS.intDec (length outs)
-                            , BS.intDec (Map.size gateMap)
+                            , BS.intDec (Bimap.size gateMap)
                             ]
 
 -- | Write AIGER input lines to the given handle.
@@ -213,10 +215,10 @@ writeAnds ::
   Handle ->
   AIGFileMode ->
   Map Var Var ->
-  Map Var (CompactLit s, CompactLit s) ->
+  Bimap Var (CompactLit s, CompactLit s) ->
   IO ()
 writeAnds h format varMap gateMap =
-  forM_ (Map.assocs gateMap) $ \(v, (l, r)) ->
+  forM_ (Bimap.assocs gateMap) $ \(v, (l, r)) ->
     case (varToLit <$> Map.lookup v varMap
          , lookupLit l varMap
          , lookupLit r varMap) of
@@ -291,7 +293,7 @@ getDifference = go 0 0
 getDifferences :: Get (Word32, Word32)
 getDifferences = (,) <$> getDifference <*> getDifference
 
-getGraph :: Get (Var, [Var], [CompactLit s], Map Var (CompactLit s, CompactLit s))
+getGraph :: Get (Var, [Var], [CompactLit s], Bimap Var (CompactLit s, CompactLit s))
 getGraph =
   do (maxvar, ninputs, nlatches, nouts, nands) <- getHeader
      outputs <- replicateM (nlatches + nouts) getOutput
@@ -307,7 +309,7 @@ getGraph =
      return ( Var (fromIntegral maxvar)
             , reverse inputs
             , outputs
-            , Map.fromList andAssocs
+            , Bimap.fromList andAssocs
             )
 
 abstractEval ::
@@ -365,11 +367,15 @@ instance IsAIG CompactLit CompactGraph where
        return (varToLit v)
 
   and g x y =
-    do v <- newVar g
-       let l = max x y
+    do let l = max x y
            r = min x y
-       modifyIORef' (andMap g) $ Map.insert v (l, r)
-       return (varToLit v)
+       gateMap <- readIORef (andMap g)
+       case Bimap.lookupR (l, r) gateMap of
+         Nothing ->
+           do v <- newVar g
+              writeIORef (andMap g) $ Bimap.insert v (l, r) gateMap
+              return (varToLit v)
+         Just v -> return (varToLit v)
 
   inputCount g = length <$> readIORef (inputs g)
 
@@ -398,7 +404,7 @@ instance IsAIG CompactLit CompactGraph where
        gateMap <- readIORef (andMap g)
        let vm = mkVarMap ins gateMap
            nvars = fromIntegral var + 1
-           nclauses = (3 * Map.size gateMap) + 2
+           nclauses = (3 * Bimap.size gateMap) + 2
            litToCNF lit =
              case Map.lookup (litToVar lit) vm of
                Just (Var v) ->
@@ -411,7 +417,7 @@ instance IsAIG CompactLit CompactGraph where
                               , BS.intDec nvars
                               , BS.intDec nclauses
                               ]
-       forM_ (Map.assocs gateMap) $ \(v, (ll, rl)) ->
+       forM_ (Bimap.assocs gateMap) $ \(v, (ll, rl)) ->
          do n <- litToCNF (varToLit v)
             li <- litToCNF ll
             ri <- litToCNF rl
@@ -452,7 +458,7 @@ instance IsAIG CompactLit CompactGraph where
     do ins <- reverse <$> readIORef (inputs g)
        gateMap <- readIORef (andMap g)
        let v = litToVar l
-       case (elemIndex v ins, Map.lookup v gateMap, litNegated l) of
+       case (elemIndex v ins, Bimap.lookup v gateMap, litNegated l) of
          (Just i, _, False)        -> return (Input i)
          (Just i, _, True)         -> return (NotInput i)
          (_, Just (l1, l2), False) -> return (And l1 l2)

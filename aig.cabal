@@ -37,6 +37,7 @@ library
   ghc-options:      -Wall -fno-ignore-asserts
   build-depends:
     base >= 4.9 && < 4.16,
+    bimap,
     binary,
     binary-parsers,
     bytestring,
