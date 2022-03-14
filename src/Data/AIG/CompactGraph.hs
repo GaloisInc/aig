@@ -24,8 +24,9 @@ module Data.AIG.CompactGraph
   ) where
 
 import Control.Monad (forM_, replicateM)
-import Data.Binary.Get
-import qualified Data.Binary.Parser as BP
+import Data.Attoparsec.ByteString (Parser)
+import qualified Data.Attoparsec.ByteString.Char8 as AttoC8
+import qualified Data.Attoparsec.ByteString.Lazy as AttoL
 import Data.Bits (shiftL, shiftR, (.&.), (.|.), xor, testBit)
 import Data.IORef (IORef, newIORef, modifyIORef', readIORef, writeIORef)
 import Data.List (elemIndex, intersperse)
@@ -256,44 +257,44 @@ encodeDifference w@(fromIntegral -> b)
 ------------------------------------------------------------------
 -- AIG parsing
 
-spaces :: Get ()
-spaces = BP.skipWhile BP.isHorizontalSpace
+spaces :: Parser ()
+spaces = AttoL.skipWhile AttoC8.isHorizontalSpace
 
-getIntWords :: Get [Int]
-getIntWords = BP.decimal `BP.sepBy` spaces
+getIntWords :: Parser [Int]
+getIntWords = AttoC8.decimal `AttoL.sepBy` spaces
 
-getIntWordsLine :: Get [Int]
-getIntWordsLine = getIntWords <* BP.skipWhile BP.isEndOfLine
+getIntWordsLine :: Parser [Int]
+getIntWordsLine = getIntWords <* AttoL.skipWhile AttoC8.isEndOfLine
 
-getHeader :: Get (Int, Int, Int, Int, Int)
+getHeader :: Parser (Int, Int, Int, Int, Int)
 getHeader =
-  do BP.string (modeString Binary)
+  do _ <- AttoL.string (modeString Binary)
      spaces
      ns <- getIntWordsLine
      case ns of
        [m, i, l, o, a] -> return (m, i, l, o, a)
        _ -> fail $ "Invalid AIG header: " ++ show ns
 
-getOutput :: Get (CompactLit s)
+getOutput :: Parser (CompactLit s)
 getOutput =
   do ns <- getIntWordsLine
      case ns of
        [n] -> return (CompactLit (fromIntegral n))
        _ -> fail $ "Invalid output line: " ++ show ns
 
-getDifference :: Get Word32
+getDifference :: Parser Word32
 getDifference = go 0 0
   where
     addByte x b i = x .|. (((fromIntegral b) .&. 0x7f) `shiftL` (7*i))
     go x i =
-      do b <- getWord8
+      do b <- AttoL.anyWord8
          let x' = addByte x b i
          if b .&. 0x80 /= 0 then go x' (i + 1) else return x'
 
-getDifferences :: Get (Word32, Word32)
+getDifferences :: Parser (Word32, Word32)
 getDifferences = (,) <$> getDifference <*> getDifference
 
-getGraph :: Get (Var, [Var], [CompactLit s], Bimap Var (CompactLit s, CompactLit s))
+getGraph :: Parser (Var, [Var], [CompactLit s], Bimap Var (CompactLit s, CompactLit s))
 getGraph =
   do (maxvar, ninputs, nlatches, nouts, nands) <- getHeader
      outputs <- replicateM (nlatches + nouts) getOutput
@@ -352,7 +353,8 @@ instance IsAIG CompactLit CompactGraph where
   withNewGraph _proxy k = k =<< newCompactGraph
 
   aigerNetwork _proxy fp =
-    do (maxv, inps, outs, gates) <- runGet getGraph <$> LBS.readFile fp
+    do res <- AttoL.parseOnly getGraph <$> LBS.readFile fp
+       (maxv, inps, outs, gates) <- either fail pure res
        maxVar  <- newIORef maxv
        inputs  <- newIORef inps
        andMap  <- newIORef gates
