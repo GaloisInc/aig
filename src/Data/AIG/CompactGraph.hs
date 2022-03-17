@@ -24,8 +24,10 @@ module Data.AIG.CompactGraph
   ) where
 
 import Control.Monad (forM_, replicateM)
-import Data.Binary.Get
-import qualified Data.Binary.Parser as BP
+import qualified Data.Attoparsec.ByteString.Char8 as AttoC8
+import qualified Data.Attoparsec.Combinator as Comb
+import Data.Attoparsec.Zepto (Parser)
+import qualified Data.Attoparsec.Zepto as Zepto
 import Data.Bits (shiftL, shiftR, (.&.), (.|.), xor, testBit)
 import Data.IORef (IORef, newIORef, modifyIORef', readIORef, writeIORef)
 import Data.List (elemIndex, intersperse)
@@ -34,9 +36,10 @@ import Data.Map (Map)
 import qualified Data.Bimap as Bimap
 import qualified Data.Map.Strict as Map
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.Lazy as LBS
+import qualified Data.ByteString.Char8 as BSC8
 import qualified Data.ByteString.Builder as BS
-import Data.Word (Word32)
+import qualified Data.ByteString.Unsafe as BSU
+import Data.Word (Word8, Word32)
 import System.IO (Handle, withFile, IOMode(..))
 
 import Data.AIG.Interface hiding (xor)
@@ -256,32 +259,80 @@ encodeDifference w@(fromIntegral -> b)
 ------------------------------------------------------------------
 -- AIG parsing
 
-spaces :: Get ()
-spaces = BP.skipWhile BP.isHorizontalSpace
+{-
+Note [Parsing the AIGER format]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+We use attoparsec's Data.Attoparsec.Zepto module to parse AIGER files, as it
+proves faster than the alternatives we have tried (megaparsec, attoparsec's
+ordinary Parser type, and binary-parsers, in ascending order of performance).
+Zepto is a highly specialized parser that performs well when there is little
+recursion or backtracking involved, for which the AIGER format is a good fit.
 
-getIntWords :: Get [Int]
-getIntWords = BP.decimal `BP.sepBy` spaces
+Zepto has two disadvantages to be aware of:
 
-getIntWordsLine :: Get [Int]
-getIntWordsLine = getIntWords <* BP.skipWhile BP.isEndOfLine
+1. The Zepto API is extremely minimal, so we have to implement some parser
+   combinators by hand. We may want to consider upstreaming some of these
+   combinators upstream to attoparsec.
 
-getHeader :: Get (Int, Int, Int, Int, Int)
+2. Zepto supports parsing strict ByteStrings but not lazy ByteStrings, so
+   we must read the entirety of the AIGER file into memory before we can parse
+   it. This has not been an issue thus far, especially since we have to parse
+   the entirety of an AIG into main memory anyway. If Zepto's memory usage
+   becomes an issue in the future, we can switch to a parser that does support
+   parsing lazy ByteStrings (e.g., attoparsec's ordinary Parser type).
+-}
+
+skipWhile :: (Word8 -> Bool) -> Parser ()
+skipWhile p = Zepto.takeWhile p *> pure ()
+
+-- This function is the only reason we need to import Data.ByteString.Unsafe.
+-- Ideally, this would live upstream in attoparsec.
+-- See https://github.com/haskell/attoparsec/issues/205
+getWord8 :: Parser Word8
+getWord8 = do
+  b <- Zepto.take 1
+  pure (BSU.unsafeHead b)
+
+spaces :: Parser ()
+spaces = skipWhile AttoC8.isHorizontalSpace
+
+getIntWords :: Parser [Int]
+getIntWords = decimal `Comb.sepBy` spaces
+
+-- Taken from the @chronos@ library, which is licensed under the 3-Clause
+-- BSD License.
+decimal :: Parser Int
+decimal = do
+  digits <- Zepto.takeWhile wordIsDigit
+  case BSC8.readInt digits of
+    Nothing -> fail "somehow this didn't work"
+    Just (i,_) -> pure i
+
+-- Taken from the @chronos@ library, which is licensed under the 3-Clause
+-- BSD License.
+wordIsDigit :: Word8 -> Bool
+wordIsDigit a = 0x30 <= a && a <= 0x39
+
+getIntWordsLine :: Parser [Int]
+getIntWordsLine = getIntWords <* skipWhile AttoC8.isEndOfLine
+
+getHeader :: Parser (Int, Int, Int, Int, Int)
 getHeader =
-  do BP.string (modeString Binary)
+  do Zepto.string (modeString Binary)
      spaces
      ns <- getIntWordsLine
      case ns of
        [m, i, l, o, a] -> return (m, i, l, o, a)
        _ -> fail $ "Invalid AIG header: " ++ show ns
 
-getOutput :: Get (CompactLit s)
+getOutput :: Parser (CompactLit s)
 getOutput =
   do ns <- getIntWordsLine
      case ns of
        [n] -> return (CompactLit (fromIntegral n))
        _ -> fail $ "Invalid output line: " ++ show ns
 
-getDifference :: Get Word32
+getDifference :: Parser Word32
 getDifference = go 0 0
   where
     addByte x b i = x .|. (((fromIntegral b) .&. 0x7f) `shiftL` (7*i))
@@ -290,10 +341,10 @@ getDifference = go 0 0
          let x' = addByte x b i
          if b .&. 0x80 /= 0 then go x' (i + 1) else return x'
 
-getDifferences :: Get (Word32, Word32)
+getDifferences :: Parser (Word32, Word32)
 getDifferences = (,) <$> getDifference <*> getDifference
 
-getGraph :: Get (Var, [Var], [CompactLit s], Bimap Var (CompactLit s, CompactLit s))
+getGraph :: Parser (Var, [Var], [CompactLit s], Bimap Var (CompactLit s, CompactLit s))
 getGraph =
   do (maxvar, ninputs, nlatches, nouts, nands) <- getHeader
      outputs <- replicateM (nlatches + nouts) getOutput
@@ -352,7 +403,9 @@ instance IsAIG CompactLit CompactGraph where
   withNewGraph _proxy k = k =<< newCompactGraph
 
   aigerNetwork _proxy fp =
-    do (maxv, inps, outs, gates) <- runGet getGraph <$> LBS.readFile fp
+    do -- See Note [Parsing the AIGER format]
+       res <- Zepto.parse getGraph <$> BS.readFile fp
+       (maxv, inps, outs, gates) <- either fail pure res
        maxVar  <- newIORef maxv
        inputs  <- newIORef inps
        andMap  <- newIORef gates
