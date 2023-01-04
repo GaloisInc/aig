@@ -37,7 +37,7 @@ library
   ghc-options:      -Wall -fno-ignore-asserts
   build-depends:
     attoparsec,
-    base >= 4.9 && < 4.17,
+    base >= 4.9 && < 4.18,
     bimap,
     bytestring,
     containers >= 0.5.5,
