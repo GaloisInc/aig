@@ -138,6 +138,7 @@ import qualified Control.Monad hiding (fail)
 import Control.Monad.State hiding (zipWithM, replicateM, mapM, sequence, fail)
 import Data.Bits ((.|.), setBit, shiftL, testBit)
 import qualified Data.Bits as Bits
+import Data.Maybe (isNothing)
 
 import qualified Data.Vector as V
 import qualified Data.Vector.Generic.Mutable as MV
@@ -626,7 +627,13 @@ subConst g x c = addConst g x (-c)
 --   of the same size as the arguments.
 --   Overflow is silently discarded.
 mul :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
-mul g x y = assert (length x == length y) $ do
+mul g x y = assert (length x == length y) $
+  if isNothing (asUnsigned g x)
+    then mul' g x y
+    else mul' g y x
+
+mul' :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
+mul' g x y = do
   -- Create mutable array to store result.
   let n = length y
   -- Function to update bits.
