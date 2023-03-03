@@ -629,12 +629,14 @@ mul :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
 mul g x y = assert (length x == length y) $ do
   -- Create mutable array to store result.
   let n = length y
+  let zeroes = replicate (length x) (falseLit g)
   -- Function to update bits.
   let updateBits i z | i == n = return z
       updateBits i z = do
-        z' <- iteM g (y ! i) (add g z (shlC g x i)) (return z)
+        x' <- ite g (y ! i) x zeroes
+        z' <- add g z (shlC g x' i)
         updateBits (i+1) z'
-  updateBits 0 $ replicate (length x) (falseLit g)
+  updateBits 0 zeroes
 
 -- | Unsigned multiply two bitvectors with size @m@ and size @n@,
 --   resulting in a vector of size @m+n@.
