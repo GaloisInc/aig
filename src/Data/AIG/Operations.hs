@@ -138,6 +138,7 @@ import qualified Control.Monad hiding (fail)
 import Control.Monad.State hiding (zipWithM, replicateM, mapM, sequence, fail)
 import Data.Bits ((.|.), setBit, shiftL, testBit)
 import qualified Data.Bits as Bits
+import Data.Maybe (isJust)
 
 import qualified Data.Vector as V
 import qualified Data.Vector.Generic.Mutable as MV
@@ -625,8 +626,36 @@ subConst g x c = addConst g x (-c)
 -- | Multiply two bitvectors with the same size, with result
 --   of the same size as the arguments.
 --   Overflow is silently discarded.
+--
+--   Because it is beneficial to have the first argument be a constant whenever
+--   possible (see the Haddocks for `mul'`), this will flip the order of
+--   arguments if the second argument is a constant.
 mul :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
-mul g x y = assert (length x == length y) $ do
+mul g x y = assert (length x == length y) $
+  if isJust (asUnsigned g y)
+    then mul' g y x -- The second argument is constant, so swap the arguments
+    else mul' g x y
+
+-- | Multiply two bitvectors with the same size, with result
+--   of the same size as the arguments.
+--   Overflow is silently discarded.
+--
+--   This algorithm computes partial products by adding multiples of the first
+--   'BV' argument, where the coefficient is computed from different bits of the
+--   second argument. The order of the arguments does matter here, and if one
+--   of the arguments is constant, it is generally preferable to make it the
+--   first argument. While it is possible to make the second argument be a
+--   constant, bitblasting the resulting AIG will result in a network of full
+--   adders, which can sometimes gives ABC trouble when proving equivalence.
+--   (The FFS example in @saw-script@
+--   <https://github.com/GaloisInc/saw-script/blob/46249dbc7bae5f48623a709b1df1cc1ea002d4c5/doc/tutorial/code/ffs.c here>
+--   is an example of this. See also the related discussion
+--   <https://github.com/GaloisInc/saw-script/pull/1833 here>.)
+--
+--   See 'mul' for a version of this function that flips the argument order if
+--   the second argument is a constant.
+mul' :: IsAIG l g => g s -> BV (l s) -> BV (l s) -> IO (BV (l s))
+mul' g x y = do
   -- Create mutable array to store result.
   let n = length y
   -- Function to update bits.
