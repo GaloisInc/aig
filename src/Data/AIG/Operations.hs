@@ -135,7 +135,9 @@ module Data.AIG.Operations
 import Control.Applicative hiding (empty)
 import Control.Exception (assert)
 import qualified Control.Monad hiding (fail)
-import Control.Monad.State hiding (zipWithM, replicateM, mapM, sequence, fail)
+import Control.Monad (foldM, forM_, join, unless)
+import Control.Monad.IO.Class (MonadIO(..))
+import Control.Monad.State (StateT(..), evalStateT)
 import Data.Bits ((.|.), setBit, shiftL, testBit)
 import qualified Data.Bits as Bits
 import Data.Maybe (isJust)
