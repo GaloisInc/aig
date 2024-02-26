@@ -62,7 +62,7 @@ test-suite aig-test
     aig,
     bytestring,
     directory,
-    tasty < 1.5,
+    tasty < 1.6,
     tasty-hunit,
     tasty-ant-xml,
     tasty-quickcheck >= 0.8.1,
